@@ -1,3 +1,14 @@
 numpy
 matplotlib
 tqdm
+pillow
+
+# RF
+scikit-learn
+
+# NN
+torch
+torchvision
+
+# XGBoost
+xgboost
