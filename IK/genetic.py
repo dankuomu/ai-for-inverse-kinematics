@@ -3,12 +3,14 @@ import time
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from typing import List, Tuple, Optional, Dict, Any
-from robots.utils import Coords
+from robots.utils import Coords, Obstacle
 from IK.ik_base import InverseKinematics
 import itertools
 from tqdm import tqdm
 import os
 from PIL import Image
+
+import logging
 
 
 class GeneticIK(InverseKinematics):
@@ -35,10 +37,11 @@ class GeneticIK(InverseKinematics):
                  min_mutation_rate: float = 1e-3,
                  max_mutation_rate: float = 1e-3,
                  mutation_steepness: float = 10.0,
-                 mutation_transition_point: float = 0.1):
+                 mutation_transition_point: float = 0.1,
+                 obstacles = None):
         super().__init__(robot)
 
-        self.logger = self.logging.getLogger(__name__).getChild(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__).getChild(self.__class__.__name__)
 
         self.target: Optional[Coords] = None
         self.pop_size = population_size
@@ -76,6 +79,8 @@ class GeneticIK(InverseKinematics):
         self.orientation_error_history = []
         self.best_individual_history = []
         self.mutation_rate_history = []  # Для отслеживания изменения коэффициента мутации
+
+        self.obstacles: list[Obstacle] = obstacles or []
 
     def get_adaptive_mutation_rate(self, pos_error: float, rot_error: float) -> float:
         """
@@ -169,9 +174,7 @@ class GeneticIK(InverseKinematics):
         pos_s = pos_error
         rot_s = rot_error
         alpha = 20.0
-
         w_rot_raw = 1.0 / (1.0 + np.exp(alpha * (pos_s - self.position_tolerance)))
-
         max_w_rot = 0.9
         w_rot = min(w_rot_raw, max_w_rot)
         w_pos = 1.0 - w_rot
@@ -184,8 +187,37 @@ class GeneticIK(InverseKinematics):
             d_angles = self.angular_difference(angles, last_best)
             angular_penalty = 0.01 * (np.linalg.norm(d_angles) / np.sqrt(len(d_angles)))
 
-        fitness_value = - (combined_error + angular_penalty)
+        obstacle_penalty = 0.0
 
+        def segment_obstacle_penalty(p1, p2, obstacles, weight=1.0):
+            """
+            p1, p2: np.array(3) - концы сегмента
+            obstacles: список объектов Obstacle
+            """
+            penalty = 0.0
+            for obs in obstacles:
+                # Найти ближайшую точку на отрезке к центру / объекту
+                # стандартный метод: проекция точки на сегмент
+                seg_vec = p2 - p1
+                seg_len2 = np.dot(seg_vec, seg_vec)
+                if seg_len2 < 1e-12:
+                    closest = p1
+                else:
+                    t = np.dot(obs.center.pos - p1, seg_vec) / seg_len2
+                    t = np.clip(t, 0, 1)
+                    closest = p1 + t * seg_vec
+                d = obs.distance_to_point(closest)
+                if d < 0:
+                    penalty += -d
+            return weight * penalty
+
+        points = self.robot.get_joint_positions(angles)
+        obs_penalty = 0.0
+        for i in range(len(points) - 1):
+            p1, p2 = points[i], points[i + 1]
+            obstacle_penalty += segment_obstacle_penalty(p1, p2, self.obstacles)
+
+        fitness_value = - (combined_error + angular_penalty + obstacle_penalty)
         return float(fitness_value)
 
     def init_population(self) -> np.ndarray:
@@ -197,9 +229,16 @@ class GeneticIK(InverseKinematics):
                              mutation_rates: List[float] = None):
         fig = plt.figure(figsize=(18, 6))
 
-        # 3D визуализация
+        # 3D визуализация робота
         ax1 = fig.add_subplot(131, projection='3d')
         self.robot.visualize(best_individual, target=self.target, ax=ax1, show=False)
+
+        # --- Визуализация препятствий ---
+        if self.obstacles:
+            for obs in self.obstacles:
+                obs.visualize(ax1)
+        # -------------------------------
+
         ax1.set_title(f'Generation {generation}\n'
                       f'Position Error: {position_errors[-1]:.6f}\n'
                       f'Orientation Error: {orientation_errors[-1]:.6f}')

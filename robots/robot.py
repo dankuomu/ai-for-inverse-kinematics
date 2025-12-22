@@ -126,39 +126,39 @@ class Robot:
 
         return np.array(positions)
 
-    def visualize(self, angles, target=None, ax=None, show=True):
+    def visualize(self, angles, target=None, ax=None, show=True, obstacles=None):
         """
-        Визуализация робота, целевой точки и систем координат.
+        Визуализация робота, целевой точки, систем координат и препятствий.
 
         :param angles: Список углов суставов
-        :param target_point: Опциональная целевая точка (array-like форма (3,))
+        :param target: Целевой объект Coords
         :param ax: Существующие оси matplotlib (если None, создаются новые)
         :param show: Флаг немедленного показа графика
+        :param obstacles: Список объектов препятствий (Sphere, Capsule, Box)
         """
         if ax is None:
             fig = plt.figure(figsize=(10, 8))
             ax = fig.add_subplot(111, projection='3d')
 
-        target_point = target.pos
-        target_orientation = target.rot_matrix
+        target_point = target.pos if target else None
+        target_orientation = target.rot_matrix if target else None
 
-        # Получаем позиции всех суставов
+        # Позиции суставов
         joint_positions = self.get_joint_positions(angles)
 
-        # Получаем текущую позицию и ориентацию энд-эффектора
+        # Энд-эффектор
         end_effector_coords = self.forward_kinematics(angles)
         end_effector_pos = end_effector_coords.pos
         end_effector_orientation = end_effector_coords.rot_matrix
 
-        # Рисуем звенья робота
+        # Звенья робота
         ax.plot(joint_positions[:, 0], joint_positions[:, 1], joint_positions[:, 2],
                 'o-', linewidth=2, markersize=5, label='Робот', color='orange')
 
-        # Система координат энд-эффектора (сплошные линии)
-        axis_length = 0.1  # Длина осей
-        colors = ['red', 'green', 'blue']  # X, Y, Z оси
+        # Системы координат энд-эффектора
+        axis_length = 0.1
+        colors = ['red', 'green', 'blue']
         axis_labels = ['X', 'Y', 'Z']
-
         for i, color in enumerate(colors):
             axis_vector = end_effector_orientation[:, i] * axis_length
             axis_end = end_effector_pos + axis_vector
@@ -168,17 +168,12 @@ class Robot:
                     color=color, linewidth=2,
                     label=f'Ось {axis_labels[i]} (Робота)')
 
-        # Рисуем целевую точку если предоставлена
+        # Целевая точка и система координат цели
         if target_point is not None:
-            target_point = np.array(target_point)
             ax.scatter(*target_point, color='black', s=10, label='Целевая позиция')
-
             if target_orientation is not None:
-                if hasattr(target_orientation, 'rot_matrix'):
-                    target_rot = target_orientation.rot_matrix
-                else:
-                    target_rot = np.array(target_orientation)
-
+                target_rot = target_orientation if isinstance(target_orientation,
+                                                              np.ndarray) else target_orientation.rot_matrix
                 for i, color in enumerate(colors):
                     axis_vector = target_rot[:, i] * axis_length
                     axis_end = target_point + axis_vector
@@ -188,36 +183,32 @@ class Robot:
                             color=color, linewidth=2, linestyle='--',
                             label=f'Ось {axis_labels[i]} (Цели)')
 
-            # Показываем ошибку позиционирования и ориентации
             error_pos = np.linalg.norm(end_effector_pos - target_point)
-
-            error_text = f'Ошибка позиции: {error_pos:.9f}'
+            orientation_error = 0.0
             if target_orientation is not None:
-                if hasattr(target_orientation, 'rot_matrix'):
-                    target_rot = target_orientation.rot_matrix
-                else:
-                    target_rot = np.array(target_orientation)
-
                 orientation_error = np.arccos(
                     np.clip(0.5 * (np.trace(end_effector_orientation.T @ target_rot) - 1), -1, 1))
-                error_text += f'\nОшибка ориентации: {orientation_error:.9f} рад'
-
+            error_text = f'Ошибка позиции: {error_pos:.9f}\nОшибка ориентации: {orientation_error:.9f} рад'
             ax.text2D(0.05, 0.95, error_text, transform=ax.transAxes,
                       bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
 
-        # Настройка графика
+        # --- Визуализация препятствий ---
+        if obstacles:
+            for obs in obstacles:
+                obs.visualize(ax)
+        # -----------------------------------
+
+        # Настройка осей и масштабирование
         ax.set_xlabel('X')
         ax.set_ylabel('Y')
         ax.set_zlabel('Z')
-        ax.set_title('Кинематическая схема робота с системами координат')
+        ax.set_title('Кинематическая схема робота с системами координат и препятствиями')
         ax.legend()
         ax.grid(True)
 
-        # Автоматическое масштабирование с учетом систем координат
         all_points = joint_positions.copy()
         if target_point is not None:
             all_points = np.vstack([all_points, target_point.reshape(1, -1)])
-            # Добавляем точки осей для правильного масштабирования
             for i in range(3):
                 axis_vector = end_effector_orientation[:, i] * axis_length
                 all_points = np.vstack([all_points, (end_effector_pos + axis_vector).reshape(1, -1)])
@@ -230,11 +221,9 @@ class Robot:
             all_points[:, 1].max() - all_points[:, 1].min(),
             all_points[:, 2].max() - all_points[:, 2].min()
         ]) * 1.0
-
         mid_x = (all_points[:, 0].max() + all_points[:, 0].min()) * 0.5
         mid_y = (all_points[:, 1].max() + all_points[:, 1].min()) * 0.5
         mid_z = (all_points[:, 2].max() + all_points[:, 2].min()) * 0.5
-
         ax.set_xlim(mid_x - max_range, mid_x + max_range)
         ax.set_ylim(mid_y - max_range, mid_y + max_range)
         ax.set_zlim(mid_z - max_range, mid_z + max_range)
@@ -247,25 +236,24 @@ class Robot:
     def op_solve(self,
                  initial_angles: np.ndarray,
                  target: Coords,
+                 obstacles: list = None,  # <-- добавлено
                  max_iter: int = 40,
                  pos_tol: float = 1e-5,
                  rot_tol: float = 1e-4,
                  pos_weight: float = 1.0,
                  rot_weight: float = 1.0,
+                 obstacle_weight: float = 1.0,  # <-- вес штрафа за препятствия
                  eps_jac: float = 1e-6,
                  max_step_norm: float = 0.5,
                  lambda0: float = 1e-3,
                  lambda_increase: float = 10.0,
                  lambda_decrease: float = 0.1):
         """
-        Уточнение решения методом Levenberg-Marquardt (дроссельный Gauss-Newton) с проверкой улучшения.
-        Возвращает: (angles, metrics)
-        Параметры:
-          - pos_weight, rot_weight: веса для комбинированной стоимости
-          - eps_jac: дельта для численного якобиана
-          - max_step_norm: максимально допустимая норма одного шага (предотвращает большие "прыжки")
-          - lambda0: начальное демпфирование
-          - lambda_increase / lambda_decrease: факторы адаптации lambda
+        Уточнение решения методом Levenberg-Marquardt с проверкой улучшения.
+        Добавлен учет препятствий через штраф за пересечение.
+
+        :param obstacles: список объектов Obstacle (Box, Capsule, Sphere и т.д.)
+        :param obstacle_weight: множитель штрафа за пересечение
         """
         import time
         start_time = time.time()
@@ -276,14 +264,11 @@ class Robot:
         target_rot = np.asarray(target.rot_matrix)
 
         def rot_angle_from_R(R):
-            # угол по матрице R (trace)
             val = 0.5 * (np.trace(R) - 1.0)
             return np.arccos(np.clip(val, -1.0, 1.0))
 
         def orientation_error_vector(R_target, R_curr):
-            # R_err = R_target * R_curr^T
             R_err = R_target @ R_curr.T
-            # осевой вектор (приближённый) = 0.5*(R_err - R_err^T) as vector part
             axis = np.array([
                 R_err[2, 1] - R_err[1, 2],
                 R_err[0, 2] - R_err[2, 0],
@@ -296,14 +281,46 @@ class Robot:
             else:
                 return np.zeros(3)
 
+        def obstacle_penalty(angles_vec):
+            if not obstacles:
+                return 0.0
+            penalty = 0.0
+            joint_positions = self.get_joint_positions(angles_vec)
+            n_joints = len(joint_positions)
+
+            for i in range(n_joints - 1):
+                p1, p2 = joint_positions[i], joint_positions[i + 1]
+                seg_vec = p2 - p1
+                seg_len2 = np.dot(seg_vec, seg_vec)
+                for obs in obstacles:
+                    if seg_len2 < 1e-12:
+                        closest = p1
+                    else:
+                        t = np.dot(obs.center.pos - p1, seg_vec) / seg_len2
+                        t = np.clip(t, 0, 1)
+                        closest = p1 + t * seg_vec
+
+                    d = obs.distance_to_point(closest)
+                    if d < 0:
+                        penalty += -d
+
+            return obstacle_weight * penalty
+
+        # ------------------------
+        # стоимость (позиция + ориентация + препятствия)
+        # ------------------------
         def cost_from(angles_vec):
             fk = self.forward_kinematics(angles_vec)
             p = fk.pos
             R = fk.rot_matrix
             pos_err = np.linalg.norm(target_pos - p)
             rot_err = np.arccos(np.clip(0.5 * (np.trace(R.T @ target_rot) - 1), -1, 1))
-            return pos_weight * pos_err + rot_weight * rot_err, pos_err, rot_err
+            obs_pen = obstacle_penalty(angles_vec)
+            return pos_weight * pos_err + rot_weight * rot_err + obs_pen, pos_err, rot_err
 
+        # ------------------------
+        # численный якобиан (6 x n)
+        # ------------------------
         def numerical_jacobian(angles_vec, eps=eps_jac):
             J = np.zeros((6, n))
             fk0 = self.forward_kinematics(angles_vec)
@@ -316,24 +333,24 @@ class Robot:
                 fk = self.forward_kinematics(a2)
                 dp = (fk.pos - p0) / eps
 
-                # ориентационная часть: (fk.R * R0^T) -> axis-angle approx
                 dR = fk.rot_matrix @ R0.T
                 axis = np.array([
                     dR[2, 1] - dR[1, 2],
                     dR[0, 2] - dR[2, 0],
                     dR[1, 0] - dR[0, 1]
                 ]) * 0.5
-                # делим на eps, даём аппроксимацию d(angle*axis)/dθ
                 J[:, i] = np.concatenate([dp, axis / eps])
             return J
 
-        # Начальная стоимость
+        # ------------------------
+        # начальная стоимость
+        # ------------------------
         best_cost, best_pos_err, best_rot_err = cost_from(angles)
         best_angles = angles.copy()
 
         lam = lambda0
-
         iter_count = 0
+
         for it in range(max_iter):
             iter_count = it
             fk = self.forward_kinematics(angles)
@@ -345,17 +362,12 @@ class Robot:
             rot_err_vec = orientation_error_vector(target_rot, R)
             rot_err = np.linalg.norm(rot_err_vec)
 
-            # Проверка выхода
             if pos_err < pos_tol and rot_err < rot_tol:
                 break
 
-            # Вектор ошибки (6,)
             err_vec = np.concatenate([pos_err_vec, rot_err_vec])
-
-            # Якобиан (6 x n)
             J = numerical_jacobian(angles)
 
-            # Составим взвешенную систему: масштабируем строки чтобы учесть веса
             W = np.ones(6)
             W[:3] *= pos_weight
             W[3:] *= rot_weight
@@ -363,40 +375,28 @@ class Robot:
             Jw = W_mat @ J
             errw = W_mat @ err_vec
 
-            # LM: (J^T J + lam I) delta = J^T err
             A = Jw.T @ Jw
             g = Jw.T @ errw
-
-            # Добавляем демпфирование к диагонали
             A_damped = A + lam * np.eye(A.shape[0])
 
-            # Решаем (с SVD fallback если плохо обусловлено)
             try:
                 delta = np.linalg.solve(A_damped, g)
             except np.linalg.LinAlgError:
-                # fallback: псевдо-инверс
                 delta = np.linalg.pinv(A_damped) @ g
 
-            # Ограничим шаг (чтобы не перепрыгивать)
             step_norm = np.linalg.norm(delta)
             if step_norm > max_step_norm:
                 delta = delta / step_norm * max_step_norm
 
             candidate = angles + delta
-
             cand_cost, cand_pos_err, cand_rot_err = cost_from(candidate)
 
-            # после J = numerical_jacobian(angles)
+            # дебаг
             sv = np.linalg.svd(J, compute_uv=False)
             cond = sv[0] / sv[-1] if sv[-1] > 0 else np.inf
             print(
-                f"[NR debug] it={it}, ||err||={np.linalg.norm(err_vec):.6g}, sv0={sv[0]:.3g}, sv_last={sv[-1]:.3g}, cond={cond:.3g}")
+                f"[NR debug] it={it}, ||err||={np.linalg.norm(err_vec):.6g}, cond={cond:.3g}, step_norm={step_norm:.3g}, lambda={lam:.3g}, cand_cost={cand_cost:.6g}, best_cost={best_cost:.6g}")
 
-            # перед применением шага
-            print(
-                f"[NR debug] step_norm={np.linalg.norm(delta):.6g}, lambda={lam:.3g}, cand_cost={cand_cost:.6g}, best_cost={best_cost:.6g}")
-
-            # Если улучшилось — принимаем и уменьшаем lam, иначе увеличиваем lam и не принимаем
             if cand_cost < best_cost - 1e-12:
                 angles = candidate
                 best_cost = cand_cost
@@ -405,27 +405,20 @@ class Robot:
                 best_rot_err = cand_rot_err
                 lam = max(lam * lambda_decrease, 1e-12)
             else:
-                # не улучшилось — увеличиваем демпфирование и повторяем попытку
                 lam *= lambda_increase
-                # если lam слишком велик, остановиться — дальнейшие шаги бессмысленны
                 if lam > 1e12:
                     break
 
-        # финальная FK на best_angles
         final_fk = self.forward_kinematics(best_angles)
         final_pos = final_fk.pos
         final_rot = final_fk.rot_matrix
-
         final_pos_err = np.linalg.norm(final_pos - target_pos)
-        final_rot_err = np.arccos(
-            np.clip(0.5 * (np.trace(final_rot.T @ target_rot) - 1), -1, 1)
-        )
-
+        final_rot_err = np.arccos(np.clip(0.5 * (np.trace(final_rot.T @ target_rot) - 1), -1, 1))
         total_time = time.time() - start_time
 
         metrics = {
             "total_time": total_time,
-            "best_fitness": -(pos_weight * final_pos_err + rot_weight * final_rot_err),  # отрицательная стоимость
+            "best_fitness": -(pos_weight * final_pos_err + rot_weight * final_rot_err + obstacle_penalty(best_angles)),
             "target_position": target_pos,
             "achieved_position": final_pos,
             "position_error": final_pos_err,
@@ -433,7 +426,7 @@ class Robot:
             "achieved_orientation": final_rot,
             "orientation_error": final_rot_err,
             "iterations": iter_count + 1,
-            "method": "Levenberg-Marquardt (refinement)"
+            "method": "Levenberg-Marquardt (refinement with obstacles)"
         }
 
         return best_angles, metrics
