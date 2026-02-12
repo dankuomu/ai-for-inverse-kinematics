@@ -25,8 +25,8 @@ class GeneticIK(InverseKinematics):
                  bounds: Optional[List[Tuple[float, float]]] = None,
                  elite_size: int = 20,
                  save_animation: bool = False,
-                 position_tolerance: float = 1e-3,
-                 orientation_tolerance: float = 1e-3,
+                 position_tolerance: float = 1e-2,
+                 orientation_tolerance: float = 1e-2,
                  max_no_improvement: int = 50,
                  save_generation_images: bool = False,
                  image_dir: str = "genetic_ik_frames",
@@ -173,7 +173,7 @@ class GeneticIK(InverseKinematics):
 
         pos_s = pos_error
         rot_s = rot_error
-        alpha = 20.0
+        alpha = 15.0
         w_rot_raw = 1.0 / (1.0 + np.exp(alpha * (pos_s - self.position_tolerance)))
         max_w_rot = 0.9
         w_rot = min(w_rot_raw, max_w_rot)

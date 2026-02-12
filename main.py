@@ -25,13 +25,13 @@ L_wrist   = 0.20   # кисть (m)
 # Если плечо "на базе", то d1 = 0
 dh_parameters = [
     # (a,        alpha,       d)
-    (0.0,        np.pi/2,     0.0),        # q1: shoulder yaw (основание на базе)
-    (0.0,       -np.pi/2,     0.0),        # q2: shoulder pitch
-    (L_upper,     0.0,        0.0),        # q3: shoulder roll (смещение вперед — верхняя рука)
-    (L_forearm,   0.0,        0.0),        # q4: elbow flex (предплечье)
-    (0.0,        np.pi/2,     0.0),        # q5: wrist pitch
-    (0.0,       -np.pi/2,     0.0),        # q6: wrist yaw
-    (L_wrist,     0.0,        0.0),        # q7: wrist roll / инструмент
+    (0.0,        np.pi/2,     0.0),
+    (0.0,       -np.pi/2,     0.0),
+    (L_upper,     0.0,        0.0),
+    (L_forearm,   0.0,        0.0),
+    (0.0,        np.pi/2,     0.0),
+    (0.0,       -np.pi/2,     0.0),
+    (L_wrist,     0.0,        0.0),
 ]
 
 
@@ -49,24 +49,16 @@ bounds = angle_limits
 
 # Целевое положение и ориентация
 
-target_position = np.array([0.3, -0.10, 0.3])
-target_rotation = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+target_position = np.array([-0.3, -0.10, 0.4])
+target_rotation = np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]])
 target = Coords(target_position, target_rotation)
 
 # Создание робота
 robot = Robot(dh_parameters)
-
-obstacles = [
-    Sphere(Coords([0.2, 0.0, 0.0]), 0.1),
-    Sphere(Coords([0.0, -0.2, 0.2]), 0.1),
-    Sphere(Coords([0.0, 0.2, 0.2]), 0.1),
-]
-
-robot.set_inverse(GeneticIK,
-                  obstacles=obstacles)
+robot.set_inverse(GeneticIK)
 
 angles, metrics = robot.solve(target)
-robot.visualize(angles, target=target, obstacles=obstacles)
+robot.visualize(angles, target=target)
 robot.ik_solver.create_animation("genetic_ik_solution.gif", frame_interval=300)
 
 print("МЕТРИКИ ГЕНЕТИЧЕСКОГО АЛГОРИТМА:")
@@ -79,8 +71,8 @@ print(f"Целевая ориентация: {metrics['target_orientation']}")
 print(f"Достигнутая ориентация: {metrics['achieved_orientation']}")
 print(f"Ошибка ориентации: {metrics['orientation_error']:.6f} радиан")
 
-angles_refined, metrics = robot.op_solve(angles, target, obstacles=obstacles)
-robot.visualize(angles_refined, target=target, obstacles=obstacles)
+angles_refined, metrics = robot.op_solve(angles, target)
+robot.visualize(angles_refined, target=target)
 
 print("МЕТРИКИ НЬЮТОНА-РАФСОНА ПОСЛЕ ГЕНЕТИЧЕСКОГО АЛГОРИТМА:")
 print(f"Общее время выполнения: {metrics['total_time']:.4f} секунд")
