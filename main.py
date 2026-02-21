@@ -1,11 +1,9 @@
 import numpy as np
 
 from robots.robot import Robot
-from robots.utils import Coords, Sphere, Capsule, Box
+from robots.utils import Coords, Sphere, Capsule
 
-from IK.genetic import GeneticIK
-from IK.decision_trees import RandomForestIK, XGBoostIK
-from IK.nn import ForwardNeuralIK
+from control.IK.genetic import GeneticIK
 
 def generate_random_targets(robot, bounds, n_samples=100):
     targets = []
@@ -17,12 +15,10 @@ def generate_random_targets(robot, bounds, n_samples=100):
         targets.append(coords)
     return targets
 
-# реальные длины (примерные, настрой под своё)
 L_upper   = 0.5   # плечо (m)
 L_forearm = 0.5   # предплечье (m)
 L_wrist   = 0.20   # кисть (m)
 
-# Если плечо "на базе", то d1 = 0
 dh_parameters = [
     # (a,        alpha,       d)
     (0.0,        np.pi/2,     0.0),
@@ -47,13 +43,10 @@ angle_limits = [
 ]
 bounds = angle_limits
 
-# Целевое положение и ориентация
-
 target_position = np.array([-0.3, -0.10, 0.4])
 target_rotation = np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]])
 target = Coords(target_position, target_rotation)
 
-# Создание робота
 robot = Robot(dh_parameters)
 robot.set_inverse(GeneticIK)
 
