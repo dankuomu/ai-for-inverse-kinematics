@@ -16,8 +16,6 @@ class GeneticIK(InverseKinematics):
                  generations: int = 100,
                  mutation_rate: float = 0.1,
                  crossover_rate: float = 0.8,
-                 w_pos: float = 0.1,
-                 w_rot: float = 0.9,
                  bounds: Optional[List[Tuple[float, float]]] = None,
                  elite_size: int = 20,
                  position_tolerance: float = 1e-2,
@@ -37,8 +35,6 @@ class GeneticIK(InverseKinematics):
         self.generations = generations
         self.mutation_rate = mutation_rate
         self.crossover_rate = crossover_rate
-        self.w_pos = w_pos
-        self.w_rot = w_rot
         self.bounds = bounds if bounds else [(-np.pi, np.pi)] * len(robot.dh_params)
         self.elite_size = elite_size
         self.position_tolerance = position_tolerance
