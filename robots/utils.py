@@ -243,8 +243,88 @@ class Coords:
 
 class Obstacle:
     """Базовый класс для всех препятствий"""
-    def distance_to_point(self, point: np.ndarray) -> float:
-        """Возвращает минимальное расстояние от точки до препятствия"""
+
+    @staticmethod
+    def _dist_seg_to_seg(a1: np.ndarray, a2: np.ndarray,
+                         b1: np.ndarray, b2: np.ndarray) -> float:
+        """
+        Минимальное евклидово расстояние между двумя отрезками в трёхмерном пространстве.
+        Отрезки заданы парами точек: [a1, a2] и [b1, b2].
+        Возвращает неотрицательное число.
+        """
+        u = a2 - a1
+        v = b2 - b1
+        w = a1 - b1
+
+        a = np.dot(u, u)
+        b = np.dot(u, v)
+        c = np.dot(v, v)
+        d = np.dot(u, w)
+        e = np.dot(v, w)
+        D = a * c - b * b
+
+        if D >= 1e-9:
+            s = (b * e - c * d) / D
+            t = (a * e - b * d) / D
+
+            if s < 0:
+                s = 0
+                t = e / c if c != 0 else 0
+                t = np.clip(t, 0, 1)
+            elif s > 1:
+                s = 1
+                t = (e + b) / c if c != 0 else 0
+                t = np.clip(t, 0, 1)
+
+            if t < 0:
+                t = 0
+                s = -d / a if a != 0 else 0
+                s = np.clip(s, 0, 1)
+            elif t > 1:
+                t = 1
+                s = (b - d) / a if a != 0 else 0
+                s = np.clip(s, 0, 1)
+
+            point_a = a1 + s * u
+            point_b = b1 + t * v
+            return np.linalg.norm(point_a - point_b)
+
+        else:
+            if a > 0:
+                direction = u / np.sqrt(a)
+            elif c > 0:
+                direction = v / np.sqrt(c)
+            else:
+                return np.linalg.norm(a1 - b1)
+
+            proj_a1 = np.dot(a1, direction)
+            proj_a2 = np.dot(a2, direction)
+            proj_b1 = np.dot(b1, direction)
+            proj_b2 = np.dot(b2, direction)
+
+            minA = min(proj_a1, proj_a2)
+            maxA = max(proj_a1, proj_a2)
+            minB = min(proj_b1, proj_b2)
+            maxB = max(proj_b1, proj_b2)
+
+            w_vec = a1 - b1
+            h_sq = np.dot(w_vec, w_vec) - (np.dot(w_vec, direction)) ** 2
+            h = np.sqrt(max(0.0, h_sq))  # защита от малых отрицательных из-за погрешностей
+
+            if max(minA, minB) <= min(maxA, maxB):
+                return h
+            else:
+                if maxA < minB:
+                    gap = minB - maxA
+                else:  # maxB < minA
+                    gap = minA - maxB
+                return np.sqrt(h * h + gap * gap)
+
+    def dist_to_me(self, seg_1: 'Coords', seg_2: 'Coords') -> float:
+        """
+        Возвращает минимальное расстояние от препятствия до отрезка,
+        заданного двумя точками в виде объектов Coords.
+        """
         raise NotImplementedError("Метод должен быть реализован в наследниках")
 
     def visualize(self, ax: Axes3D, color='r', alpha=0.3):
@@ -253,14 +333,14 @@ class Obstacle:
 
 
 class Sphere(Obstacle):
-    def __init__(self, center: 'Coords', radius: float):
+    def __init__(self, center: Coords, radius: float):
         self.center = center
         self.radius = radius
 
-    def distance_to_point(self, point: np.ndarray) -> float:
-        """Положительное расстояние, если снаружи, отрицательное если внутри"""
-        d = np.linalg.norm(point - self.center.pos) - self.radius
-        return d
+    def dist_to_me(self, seg_1: Coords, seg_2: Coords) -> float:
+        d_center = Obstacle._dist_seg_to_seg(seg_1.pos, seg_2.pos,
+                                             self.center.pos, self.center.pos)
+        return max(0.0, d_center - self.radius)
 
     def visualize(self, ax: Axes3D, color='r', alpha=0.3):
         u, v = np.mgrid[0:2*np.pi:30j, 0:np.pi:15j]
@@ -271,114 +351,68 @@ class Sphere(Obstacle):
 
 
 class Capsule(Obstacle):
-    def __init__(self, center: 'Coords', radius: float, height: float, axis=np.array([0, 0, 1])):
+    def __init__(self, center: Coords, radius: float, height: float,
+                 local_axis: np.ndarray = np.array([0, 0, 1])):
         self.center = center
         self.radius = radius
         self.height = height
-        self.axis = axis / np.linalg.norm(axis)  # нормализуем ось
+        self.local_axis = local_axis / np.linalg.norm(local_axis)
 
-    def distance_to_point(self, point: np.ndarray) -> float:
-        """Расстояние до капсулы вдоль оси"""
-        p_rel = point - self.center.pos
-        proj_len = np.dot(p_rel, self.axis)
+    @property
+    def world_axis(self) -> np.ndarray:
+        """Ось капсулы в мировых координатах (с учётом поворота центра)."""
+        return self.center.rot @ self.local_axis
+
+    def dist_to_me(self, seg_1: Coords, seg_2: Coords) -> float:
+        axis = self.world_axis
         half_h = self.height / 2
-        proj_clamped = np.clip(proj_len, -half_h, half_h)
-        closest_point = self.center.pos + proj_clamped * self.axis
-        dist = np.linalg.norm(point - closest_point) - self.radius
-        return dist
+        c1 = self.center.pos - half_h * axis
+        c2 = self.center.pos + half_h * axis
+        d_line = Obstacle._dist_seg_to_seg(seg_1.pos, seg_2.pos, c1, c2)
+        return max(0.0, d_line - self.radius)
 
-    def visualize(self, ax: 'Axes3D', color='r', alpha=0.3, resolution=30):
-        # Создаем цилиндр
-        z = np.linspace(-self.height / 2, self.height / 2, resolution)
-        theta = np.linspace(0, 2 * np.pi, resolution)
-        theta_grid, z_grid = np.meshgrid(theta, z)
-        x_grid = self.radius * np.cos(theta_grid)
-        y_grid = self.radius * np.sin(theta_grid)
-
-        # Оси цилиндра совпадают с axis
-        # Простейшее приближение: если ось не совпадает с Z, делаем вращение
-        axis = self.axis
-
-        # Находим поворотную матрицу, чтобы Z=[0,0,1] превратить в axis
-        def rotation_matrix_from_vectors(vec1, vec2):
-            a, b = (vec1 / np.linalg.norm(vec1)).reshape(3), (vec2 / np.linalg.norm(vec2)).reshape(3)
-            v = np.cross(a, b)
-            c = np.dot(a, b)
+    def visualize(self, ax: Axes3D, color='r', alpha=0.3, resolution=30):
+        def rotation_matrix_from_z_to_axis(axis):
+            z = np.array([0, 0, 1])
+            a = axis / np.linalg.norm(axis)
+            v = np.cross(z, a)
+            c = np.dot(z, a)
             s = np.linalg.norm(v)
-            if s == 0:
+            if s < 1e-9:
                 return np.eye(3)
             kmat = np.array([[0, -v[2], v[1]],
                              [v[2], 0, -v[0]],
                              [-v[1], v[0], 0]])
             return np.eye(3) + kmat + kmat @ kmat * ((1 - c) / (s ** 2))
 
-        R = rotation_matrix_from_vectors(np.array([0, 0, 1]), axis)
+        R = rotation_matrix_from_z_to_axis(self.world_axis)
+
+        z = np.linspace(-self.height/2, self.height/2, resolution)
+        theta = np.linspace(0, 2*np.pi, resolution)
+        theta_grid, z_grid = np.meshgrid(theta, z)
+        x_grid = self.radius * np.cos(theta_grid)
+        y_grid = self.radius * np.sin(theta_grid)
+
         xyz = np.vstack([x_grid.ravel(), y_grid.ravel(), z_grid.ravel()])
         xyz_rot = R @ xyz
-        x = xyz_rot[0, :].reshape(x_grid.shape) + self.center.pos[0]
-        y = xyz_rot[1, :].reshape(y_grid.shape) + self.center.pos[1]
-        z = xyz_rot[2, :].reshape(z_grid.shape) + self.center.pos[2]
+        X = xyz_rot[0, :].reshape(x_grid.shape) + self.center.pos[0]
+        Y = xyz_rot[1, :].reshape(y_grid.shape) + self.center.pos[1]
+        Z = xyz_rot[2, :].reshape(z_grid.shape) + self.center.pos[2]
+        ax.plot_surface(X, Y, Z, color=color, alpha=alpha)
 
-        ax.plot_surface(x, y, z, color=color, alpha=alpha)
-
-        # Полусферы на концах
         phi = np.linspace(0, np.pi, resolution)
-        theta_s = np.linspace(0, 2 * np.pi, resolution)
+        theta_s = np.linspace(0, 2*np.pi, resolution)
         phi_grid, theta_grid = np.meshgrid(phi, theta_s)
 
-        # Нижняя полусфера
         x_s = self.radius * np.sin(phi_grid) * np.cos(theta_grid)
         y_s = self.radius * np.sin(phi_grid) * np.sin(theta_grid)
-        z_s = -self.height / 2 + self.radius * np.cos(phi_grid)
-        xyz_s = np.vstack([x_s.ravel(), y_s.ravel(), z_s.ravel()])
-        xyz_s_rot = R @ xyz_s
-        x = xyz_s_rot[0, :].reshape(x_s.shape) + self.center.pos[0]
-        y = xyz_s_rot[1, :].reshape(y_s.shape) + self.center.pos[1]
-        z = xyz_s_rot[2, :].reshape(z_s.shape) + self.center.pos[2]
-        ax.plot_surface(x, y, z, color=color, alpha=alpha)
+        z_s_low = -self.height/2 + self.radius * np.cos(phi_grid)
+        z_s_high = self.height/2 + self.radius * np.cos(phi_grid)
 
-        # Верхняя полусфера
-        z_s = self.height / 2 + self.radius * np.cos(phi_grid)
-        xyz_s = np.vstack([x_s.ravel(), y_s.ravel(), z_s.ravel()])
-        xyz_s_rot = R @ xyz_s
-        x = xyz_s_rot[0, :].reshape(x_s.shape) + self.center.pos[0]
-        y = xyz_s_rot[1, :].reshape(y_s.shape) + self.center.pos[1]
-        z = xyz_s_rot[2, :].reshape(z_s.shape) + self.center.pos[2]
-        ax.plot_surface(x, y, z, color=color, alpha=alpha)
-
-
-class Box(Obstacle):
-    def __init__(self, corner1: 'Coords', corner2: 'Coords'):
-        """
-        Коробка задается двумя противоположными углами
-        """
-        self.corner1 = np.array(corner1.pos)
-        self.corner2 = np.array(corner2.pos)
-        self.min_corner = np.minimum(self.corner1, self.corner2)
-        self.max_corner = np.maximum(self.corner1, self.corner2)
-        self.sizes = self.max_corner - self.min_corner
-
-
-    def distance_to_point(self, point: np.ndarray) -> float:
-        p_rel = point - self.min_corner
-        d = np.maximum(p_rel - self.sizes, 0)
-        dist_outside = np.linalg.norm(d)
-        inside = np.all(p_rel >= 0) and np.all(p_rel <= self.sizes)
-        return -dist_outside if inside else dist_outside
-
-    def visualize(self, ax: 'Axes3D', color='r', alpha=0.3):
-        x = [self.min_corner[0], self.max_corner[0]]
-        y = [self.min_corner[1], self.max_corner[1]]
-        z = [self.min_corner[2], self.max_corner[2]]
-
-        xx, yy = np.meshgrid(x, y)
-        ax.plot_surface(xx, yy, np.full_like(xx, z[0]), color=color, alpha=alpha)
-        ax.plot_surface(xx, yy, np.full_like(xx, z[1]), color=color, alpha=alpha)
-        yy, zz = np.meshgrid(y, z)
-        ax.plot_surface(np.full_like(yy, x[0]), yy, zz, color=color, alpha=alpha)
-        ax.plot_surface(np.full_like(yy, x[1]), yy, zz, color=color, alpha=alpha)
-        xx, zz = np.meshgrid(x, z)
-        ax.plot_surface(xx, np.full_like(xx, y[0]), zz, color=color, alpha=alpha)
-        ax.plot_surface(xx, np.full_like(xx, y[1]), zz, color=color, alpha=alpha)
-
-# TODO: Сфера, пилюля и раздавленная пилялю
+        for z_s in (z_s_low, z_s_high):
+            xyz_s = np.vstack([x_s.ravel(), y_s.ravel(), z_s.ravel()])
+            xyz_s_rot = R @ xyz_s
+            X = xyz_s_rot[0, :].reshape(x_s.shape) + self.center.pos[0]
+            Y = xyz_s_rot[1, :].reshape(y_s.shape) + self.center.pos[1]
+            Z = xyz_s_rot[2, :].reshape(z_s.shape) + self.center.pos[2]
+            ax.plot_surface(X, Y, Z, color=color, alpha=alpha)
