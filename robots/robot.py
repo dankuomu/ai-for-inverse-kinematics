@@ -391,12 +391,6 @@ class Robot:
             candidate = angles + delta
             cand_cost, cand_pos_err, cand_rot_err = cost_from(candidate)
 
-            # дебаг
-            sv = np.linalg.svd(J, compute_uv=False)
-            cond = sv[0] / sv[-1] if sv[-1] > 0 else np.inf
-            print(
-                f"[NR debug] it={it}, ||err||={np.linalg.norm(err_vec):.6g}, cond={cond:.3g}, step_norm={step_norm:.3g}, lambda={lam:.3g}, cand_cost={cand_cost:.6g}, best_cost={best_cost:.6g}")
-
             if cand_cost < best_cost - 1e-12:
                 angles = candidate
                 best_cost = cand_cost

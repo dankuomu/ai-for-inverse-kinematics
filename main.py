@@ -17,7 +17,7 @@ def generate_random_targets(robot, bounds, n_samples=100):
 
 L_upper   = 0.5   # плечо (m)
 L_forearm = 0.5   # предплечье (m)
-L_wrist   = 0.20   # кисть (m)
+L_wrist   = 0.20  # кисть (m)
 
 dh_parameters = [
     # (a,        alpha,       d)
@@ -35,7 +35,7 @@ dh_parameters = [
 angle_limits = [
     (-np.pi/2, np.pi/4),   # α
     (0, np.pi),            # β
-    (0, 0),   # γ
+    (0, 0),                # γ
     (0, np.pi),            # δ
     (-np.pi/2, np.pi/2),   # ε
     (-np.pi/2, np.pi/2),   # θ
@@ -47,11 +47,17 @@ target_position = np.array([-0.3, -0.10, 0.4])
 target_rotation = np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]])
 target = Coords(target_position, target_rotation)
 
+obstacles = [
+    Sphere(Coords([0.2, 0.0, 0.0]), 0.1),
+    Sphere(Coords([0.0, -0.2, 0.2]), 0.1),
+    Sphere(Coords([0.0, 0.2, 0.2]), 0.1),
+]
+
 robot = Robot(dh_parameters)
-robot.set_inverse(GeneticIK)
+robot.set_inverse(GeneticIK, obstacles=obstacles)
 
 angles, metrics = robot.solve(target)
-robot.visualize(angles, target=target)
+robot.visualize(angles, target=target, obstacles=obstacles)
 robot.ik_solver.create_animation("genetic_ik_solution.gif", frame_interval=300)
 
 print("МЕТРИКИ ГЕНЕТИЧЕСКОГО АЛГОРИТМА:")

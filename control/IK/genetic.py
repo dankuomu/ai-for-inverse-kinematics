@@ -23,7 +23,11 @@ class GeneticIK(InverseKinematics):
                  max_no_improvement: int = 50,
                  early_stopping_delta: float = 1e-2,
                  early_stopping_patience: int = 50,
-                 save_generation_images: bool = False,
+                 error_weight_mode: str = "exp",
+                 constant_orientation_weight: float = 0.5,
+                 exp_weight_alpha: float = 5.0,
+                 max_orientation_weight: float = 0.95,
+                 save_generation_images: bool = True,
                  image_dir: str = "genetic_ik_frames",
                  obstacles=None):
         super().__init__(robot)
@@ -42,6 +46,10 @@ class GeneticIK(InverseKinematics):
         self.max_no_improvement = max_no_improvement
         self.early_stopping_delta = early_stopping_delta
         self.early_stopping_patience = early_stopping_patience
+        self.error_weight_mode = error_weight_mode
+        self.constant_orientation_weight = float(np.clip(constant_orientation_weight, 0.0, 1.0))
+        self.exp_weight_alpha = exp_weight_alpha
+        self.max_orientation_weight = max_orientation_weight
         self.save_generation_images = save_generation_images
         self.image_dir = image_dir
         if save_generation_images:
@@ -78,20 +86,14 @@ class GeneticIK(InverseKinematics):
         rot_error = float(np.arccos(trace_clipped))
         return pos_error, rot_error
 
-    def segment_obstacle_penalty(self, p1, p2, weight=1.0):
+    def segment_obstacle_penalty(self, p1: Coords, p2: Coords, sigma=0.01, weight=1.0):
+        """
+        Штраф для каждого препятствия: exp(-d / sigma), где d = dist_to_me.
+        """
         penalty = 0.0
         for obs in self.obstacles:
-            seg_vec = p2 - p1
-            seg_len2 = np.dot(seg_vec, seg_vec)
-            if seg_len2 < 1e-12:
-                closest = p1
-            else:
-                t = np.dot(obs.center.pos - p1, seg_vec) / seg_len2
-                t = np.clip(t, 0, 1)
-                closest = p1 + t * seg_vec
-            d = obs.distance_to_point(closest)
-            if d < 0:
-                penalty += -d
+            d = obs.dist_to_me(p1, p2)
+            penalty += np.exp(-d / sigma)
         return weight * penalty
 
     def _create_individual(self) -> np.ndarray:
@@ -100,10 +102,12 @@ class GeneticIK(InverseKinematics):
     def _fitness(self, angles: np.ndarray) -> float:
         pos_error, rot_error = self.calculate_errors(angles)
 
-        alpha = 15.0
-        w_rot_raw = 1.0 / (1.0 + np.exp(alpha * (pos_error - self.position_tolerance)))
-        max_w_rot = 0.9
-        w_rot = min(w_rot_raw, max_w_rot)
+        if self.error_weight_mode == "constant":
+            w_rot = self.constant_orientation_weight
+        else:
+            # Exponential/sigmoid schedule: orientation gets higher weight near target.
+            w_rot_raw = 1.0 / (1.0 + np.exp(self.exp_weight_alpha * (pos_error - self.position_tolerance)))
+            w_rot = min(w_rot_raw, self.max_orientation_weight)
         w_pos = 1.0 - w_rot
 
         combined_error = w_pos * pos_error + w_rot * rot_error
@@ -115,7 +119,8 @@ class GeneticIK(InverseKinematics):
             angular_penalty = 0.01 * (np.linalg.norm(d_angles) / np.sqrt(len(d_angles)))
 
         obstacle_penalty = 0.0
-        points = self.robot.get_joint_positions(angles)
+        points_positions = self.robot.get_joint_positions(angles)
+        points = [Coords(points_positions[i]) for i in range(len(points_positions))]
         for i in range(len(points)-1):
             obstacle_penalty += self.segment_obstacle_penalty(points[i], points[i+1])
 
