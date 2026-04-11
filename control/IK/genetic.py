@@ -2,6 +2,7 @@ import numpy as np
 import time
 import matplotlib.pyplot as plt
 import os
+from itertools import product
 from PIL import Image
 from typing import List, Tuple, Optional, Dict, Any
 from robots.utils import Coords, Obstacle
@@ -86,6 +87,15 @@ class GeneticIK(InverseKinematics):
         rot_error = float(np.arccos(trace_clipped))
         return pos_error, rot_error
 
+    def _combined_task_error(self, pos_error: float, orient_error: float) -> float:
+        if self.error_weight_mode == "constant":
+            w_rot = self.constant_orientation_weight
+        else:
+            w_rot_raw = 1.0 / (1.0 + np.exp(self.exp_weight_alpha * (pos_error - self.position_tolerance)))
+            w_rot = min(w_rot_raw, self.max_orientation_weight)
+        w_pos = 1.0 - w_rot
+        return w_pos * pos_error + w_rot * orient_error
+
     def segment_obstacle_penalty(self, p1: Coords, p2: Coords, sigma=0.01, weight=1.0):
         """
         Штраф для каждого препятствия: exp(-d / sigma), где d = dist_to_me.
@@ -101,16 +111,7 @@ class GeneticIK(InverseKinematics):
 
     def _fitness(self, angles: np.ndarray) -> float:
         pos_error, rot_error = self.calculate_errors(angles)
-
-        if self.error_weight_mode == "constant":
-            w_rot = self.constant_orientation_weight
-        else:
-            # Exponential/sigmoid schedule: orientation gets higher weight near target.
-            w_rot_raw = 1.0 / (1.0 + np.exp(self.exp_weight_alpha * (pos_error - self.position_tolerance)))
-            w_rot = min(w_rot_raw, self.max_orientation_weight)
-        w_pos = 1.0 - w_rot
-
-        combined_error = w_pos * pos_error + w_rot * rot_error
+        combined_error = self._combined_task_error(pos_error, rot_error)
 
         angular_penalty = 0.0
         if self.best_individual_history:
@@ -231,6 +232,54 @@ class GeneticIK(InverseKinematics):
             'generations_completed': metrics['generations_completed']
         })
         return best_individual, metrics
+
+    def tune(self, targets: List[Coords], param_grid: Dict[str, List[Any]]) -> Dict[str, Any]:
+        """
+        Перебор декартова произведения ``param_grid``; для каждого набора — ``solve`` на всех ``targets``.
+        Критерий: минимум среднего ``_combined_task_error(pos, orient)`` по целям.
+        Лучший набор записывается в ``self.best_params``.
+        """
+        if not targets:
+            raise ValueError("targets не должен быть пустым")
+        if not param_grid:
+            raise ValueError("param_grid не должен быть пустым")
+        keys = list(param_grid.keys())
+        for k in keys:
+            if not hasattr(self, k):
+                raise ValueError(f"Неизвестный параметр тюнинга для GeneticIK: {k}")
+
+        best_mean = np.inf
+        best_combo: Dict[str, Any] = {}
+        history: List[Dict[str, Any]] = []
+
+        for vals in product(*(param_grid[k] for k in keys)):
+            combo = dict(zip(keys, vals))
+            total = 0.0
+            per_target: List[float] = []
+            for target in targets:
+                _, metrics = self.solve(target, **combo)
+                pe = metrics.get("position_error")
+                oe = metrics.get("orientation_error")
+                if pe is None:
+                    pe = np.inf
+                if oe is None:
+                    oe = 0.0
+                ce = self._combined_task_error(float(pe), float(oe))
+                total += ce
+                per_target.append(ce)
+            mean_ce = total / len(targets)
+            history.append({"params": dict(combo), "mean_combined_error": mean_ce, "per_target": per_target})
+            self.logger.info(f"tune GeneticIK {combo} -> mean_combined={mean_ce:.6f}")
+            if mean_ce < best_mean:
+                best_mean = mean_ce
+                best_combo = dict(combo)
+
+        self.best_params = best_combo
+        return {
+            "best_params": best_combo,
+            "best_mean_combined_error": best_mean,
+            "history": history,
+        }
 
     def visualize_generation(self, generation: int, best_individual: np.ndarray,
                              position_errors: List[float], orientation_errors: List[float]):

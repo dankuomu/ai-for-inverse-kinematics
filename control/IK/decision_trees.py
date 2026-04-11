@@ -1,14 +1,40 @@
-import numpy as np
-from sklearn.model_selection import train_test_split
+import logging
+import os
+from typing import Dict, List, Optional, Sequence, Tuple
+
 import matplotlib.pyplot as plt
-
-from typing import List, Tuple, Optional, Dict, Any
-
+import numpy as np
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
 from xgboost import XGBRegressor
 
 from robots.utils import Coords
-from IK.ik_base import InverseKinematics
+from control.IK.ik_base import InverseKinematics
+from control.IK.ml_dataset import (
+    build_xy_from_robot,
+    joint_grid_to_configurations,
+    orientation_error_radians,
+    position_error,
+    sample_random_joint_configs,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _metrics_for_prediction(robot, pred: np.ndarray, target: Coords) -> Dict:
+    achieved = robot.forward_kinematics(pred)
+    pos_err = position_error(achieved, target)
+    rot_err = orientation_error_radians(achieved, target)
+    return {
+        "target_position": target.pos,
+        "achieved_position": achieved.pos,
+        "position_error": pos_err,
+        "target_orientation": target.rot_matrix,
+        "achieved_orientation": achieved.rot_matrix,
+        "orientation_error": rot_err,
+        "best_fitness": pos_err + rot_err,
+    }
+
 
 class RandomForestIK(InverseKinematics):
     def __init__(self,
@@ -37,36 +63,51 @@ class RandomForestIK(InverseKinematics):
         self.angle_limits = angle_limits
         self.dataset_size = dataset_size
 
+        self._log = logger.getChild(self.__class__.__name__)
+
         if auto_train:
-            self.generate_dataset(angle_limits, dataset_size)
+            self.generate_dataset_random(angle_limits, dataset_size)
             self.train(plot_learning_curve=False)
 
-    def generate_dataset(self,
-                         angle_limits: List[Tuple[float, float]],
-                         n_samples: int = 5000):
-
-        X, y = [], []
-
-        for _ in range(n_samples):
-            angles = np.array([np.random.uniform(a, b) for (a, b) in angle_limits])
-            coords = self.robot.forward_kinematics(angles)
-
-            feature = np.concatenate([coords.pos, coords.rot_matrix.reshape(-1)])
-            X.append(feature)
-            y.append(angles)
-
-        self.X = np.array(X)
-        self.y = np.array(y)
-
-        print(f"[RF IK] Dataset created: X={self.X.shape}, y={self.y.shape}")
-
+    def generate_dataset_random(
+            self,
+            angle_limits: Optional[List[Tuple[float, float]]] = None,
+            n_samples: Optional[int] = None,
+            rng: Optional[np.random.Generator] = None,
+    ):
+        limits = angle_limits if angle_limits is not None else self.angle_limits
+        if limits is None:
+            raise ValueError("Задайте angle_limits в конструкторе или в generate_dataset_random.")
+        n = n_samples if n_samples is not None else self.dataset_size
+        A = sample_random_joint_configs(limits, n, rng=rng)
+        self.X, self.y = build_xy_from_robot(self.robot, A, dtype_x=np.float64, dtype_y=np.float64)
+        self._log.info("Dataset (random): X=%s, y=%s", self.X.shape, self.y.shape)
         return self.X, self.y
+
+    def generate_dataset_grid(
+            self,
+            angle_limits: List[Tuple[float, float]],
+            joint_value_grid: Dict[int, Sequence[float]],
+            default_angles: Optional[np.ndarray] = None,
+            max_combinations: int = 50_000,
+    ):
+        n_j = len(angle_limits)
+        A = joint_grid_to_configurations(
+            n_j, angle_limits, joint_value_grid, default_angles, max_combinations=max_combinations
+        )
+        self.X, self.y = build_xy_from_robot(self.robot, A, dtype_x=np.float64, dtype_y=np.float64)
+        self._log.info("Dataset (grid): X=%s, y=%s", self.X.shape, self.y.shape)
+        return self.X, self.y
+
+    def generate_dataset(self, angle_limits: List[Tuple[float, float]], n_samples: int = 5000):
+        return self.generate_dataset_random(angle_limits, n_samples)
 
     def train(self, plot_learning_curve=True):
 
-        try: self.X
+        try:
+            self.X
         except AttributeError:
-            _, _ = self.generate_dataset(self.angle_limits, self.dataset_size)
+            self.generate_dataset_random(self.angle_limits, self.dataset_size)
 
         X_train, X_test, y_train, y_test = train_test_split(
             self.X, self.y,
@@ -77,12 +118,10 @@ class RandomForestIK(InverseKinematics):
         self.model.fit(X_train, y_train)
         self.trained = True
 
-        train_mse = np.mean((self.model.predict(X_train) - y_train)**2)
-        test_mse  = np.mean((self.model.predict(X_test)  - y_test)**2)
+        train_mse = np.mean((self.model.predict(X_train) - y_train) ** 2)
+        test_mse = np.mean((self.model.predict(X_test) - y_test) ** 2)
 
-        print("[RF IK] Training complete:")
-        print(f"  Train MSE = {train_mse:.6e}")
-        print(f"  Test  MSE = {test_mse:.6e}")
+        self._log.info("Training complete: train MSE=%.6e, test MSE=%.6e", train_mse, test_mse)
 
         if plot_learning_curve:
             self._plot_learning_curve(X_train, y_train, X_test, y_test)
@@ -105,8 +144,8 @@ class RandomForestIK(InverseKinematics):
             )
             model.fit(Xp, yp)
 
-            train_err.append(np.mean((model.predict(Xp) - yp)**2))
-            test_err .append(np.mean((model.predict(X_test) - y_test)**2))
+            train_err.append(np.mean((model.predict(Xp) - yp) ** 2))
+            test_err.append(np.mean((model.predict(X_test) - y_test) ** 2))
 
         plt.figure(figsize=(8, 5))
         plt.plot(sizes, train_err, label="Train MSE")
@@ -126,21 +165,7 @@ class RandomForestIK(InverseKinematics):
         x = np.concatenate([target.pos, target.rot_matrix.reshape(-1)]).reshape(1, -1)
         pred = self.model.predict(x)[0]
 
-        achieved = self.robot.forward_kinematics(pred)
-
-        pos_err = np.linalg.norm(achieved.pos - target.pos)
-        rot_err = np.linalg.norm(achieved.rot_matrix - target.rot_matrix)
-
-        metrics = {
-            "target_position": target.pos,
-            "achieved_position": achieved.pos,
-            "position_error": pos_err,
-            "target_orientation": target.rot_matrix,
-            "achieved_orientation": achieved.rot_matrix,
-            "orientation_error": rot_err,
-            "best_fitness": pos_err + rot_err
-        }
-
+        metrics = _metrics_for_prediction(self.robot, pred, target)
         return pred, metrics
 
 
@@ -175,7 +200,7 @@ class XGBoostIK(InverseKinematics):
             random_state=random_state
         )
 
-        self.logger = self.logging.getLogger(__name__).getChild(self.__class__.__name__)
+        self._log = logger.getChild(self.__class__.__name__)
 
         self.test_size = test_size
         self.auto_train = auto_train
@@ -188,48 +213,74 @@ class XGBoostIK(InverseKinematics):
             self._try_load(self.model_path)
 
         if self.auto_train and not self.trained:
-            self.generate_dataset(self.angle_limits, self.dataset_size)
+            self.generate_dataset_random(self.angle_limits, self.dataset_size)
             self.train(plot_learning_curve=False)
 
-    def generate_dataset(self, angle_limits: List[Tuple[float, float]], n_samples: int = 5000):
-        X, y = [], []
-        for _ in range(n_samples):
-            angles = np.array([np.random.uniform(a, b) for (a, b) in angle_limits])
-            coords = self.robot.forward_kinematics(angles)
-            feature = np.concatenate([coords.pos, coords.rot_matrix.reshape(-1)])
-            X.append(feature)
-            y.append(angles)
-        self.X = np.array(X)
-        self.y = np.array(y)
-        print(f"[XGB IK] Dataset created: X={self.X.shape}, y={self.y.shape}")
+    def _try_load(self, path: str) -> None:
+        if not os.path.isfile(path):
+            return
+        import joblib
+        self.model = joblib.load(path)
+        self.trained = True
+        self._log.info("Loaded XGBoost model from %s", path)
+
+    def generate_dataset_random(
+            self,
+            angle_limits: Optional[List[Tuple[float, float]]] = None,
+            n_samples: Optional[int] = None,
+            rng: Optional[np.random.Generator] = None,
+    ):
+        limits = angle_limits if angle_limits is not None else self.angle_limits
+        if limits is None:
+            raise ValueError("Задайте angle_limits в конструкторе или в generate_dataset_random.")
+        n = n_samples if n_samples is not None else self.dataset_size
+        A = sample_random_joint_configs(limits, n, rng=rng)
+        self.X, self.y = build_xy_from_robot(self.robot, A, dtype_x=np.float64, dtype_y=np.float64)
+        self._log.info("Dataset (random): X=%s, y=%s", self.X.shape, self.y.shape)
         return self.X, self.y
 
+    def generate_dataset_grid(
+            self,
+            angle_limits: List[Tuple[float, float]],
+            joint_value_grid: Dict[int, Sequence[float]],
+            default_angles: Optional[np.ndarray] = None,
+            max_combinations: int = 50_000,
+    ):
+        n_j = len(angle_limits)
+        A = joint_grid_to_configurations(
+            n_j, angle_limits, joint_value_grid, default_angles, max_combinations=max_combinations
+        )
+        self.X, self.y = build_xy_from_robot(self.robot, A, dtype_x=np.float64, dtype_y=np.float64)
+        self._log.info("Dataset (grid): X=%s, y=%s", self.X.shape, self.y.shape)
+        return self.X, self.y
+
+    def generate_dataset(self, angle_limits: List[Tuple[float, float]], n_samples: int = 5000):
+        return self.generate_dataset_random(angle_limits, n_samples)
+
     def train(self, plot_learning_curve=True):
-        try: self.X
+        try:
+            self.X
         except AttributeError:
-            self.generate_dataset(self.angle_limits, self.dataset_size)
+            self.generate_dataset_random(self.angle_limits, self.dataset_size)
 
         X_train, X_test, y_train, y_test = train_test_split(
             self.X, self.y,
             test_size=self.test_size,
-            random_state=1
+            random_state=self.random_state
         )
 
         self.model.fit(X_train, y_train)
         self.trained = True
 
-        train_mse = np.mean((self.model.predict(X_train) - y_train)**2)
-        test_mse  = np.mean((self.model.predict(X_test)  - y_test)**2)
+        train_mse = np.mean((self.model.predict(X_train) - y_train) ** 2)
+        test_mse = np.mean((self.model.predict(X_test) - y_test) ** 2)
 
-        self.logger
-        print("[XGB IK] Training complete:")
-        print(f"  Train MSE = {train_mse:.6e}")
-        print(f"  Test  MSE = {test_mse:.6e}")
+        self._log.info("Training complete: train MSE=%.6e, test MSE=%.6e", train_mse, test_mse)
 
         if self.model_path:
             import joblib
             joblib.dump(self.model, self.model_path)
-            print(f"[XGB IK] Model saved to {self.model_path}")
+            self._log.info("Model saved to %s", self.model_path)
 
         if plot_learning_curve:
             self._plot_learning_curve(X_train, y_train, X_test, y_test)
@@ -243,8 +294,8 @@ class XGBoostIK(InverseKinematics):
             yp = y_train[:m]
             model = XGBRegressor(**self.model.get_params())
             model.fit(Xp, yp)
-            train_err.append(np.mean((model.predict(Xp) - yp)**2))
-            test_err.append(np.mean((model.predict(X_test) - y_test)**2))
+            train_err.append(np.mean((model.predict(Xp) - yp) ** 2))
+            test_err.append(np.mean((model.predict(X_test) - y_test) ** 2))
         plt.figure(figsize=(8, 5))
         plt.plot(sizes, train_err, label="Train MSE")
         plt.plot(sizes, test_err, label="Test MSE")
@@ -260,16 +311,5 @@ class XGBoostIK(InverseKinematics):
             raise RuntimeError("XGBoostIK not trained. Use train() or auto_train=True.")
         x = np.concatenate([target.pos, target.rot_matrix.reshape(-1)]).reshape(1, -1)
         pred = self.model.predict(x)[0]
-        achieved = self.robot.forward_kinematics(pred)
-        pos_err = np.linalg.norm(achieved.pos - target.pos)
-        rot_err = np.linalg.norm(achieved.rot_matrix - target.rot_matrix)
-        metrics = {
-            "target_position": target.pos,
-            "achieved_position": achieved.pos,
-            "position_error": pos_err,
-            "target_orientation": target.rot_matrix,
-            "achieved_orientation": achieved.rot_matrix,
-            "orientation_error": rot_err,
-            "best_fitness": pos_err + rot_err
-        }
+        metrics = _metrics_for_prediction(self.robot, pred, target)
         return pred, metrics

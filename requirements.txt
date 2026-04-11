@@ -5,6 +5,7 @@ pillow
 
 # RF
 scikit-learn
+joblib
 
 # NN
 torch

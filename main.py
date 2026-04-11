@@ -84,31 +84,15 @@ print(f"Достигнутая ориентация: {metrics['achieved_orientat
 print(f"Ошибка ориентации: {metrics['orientation_error']:.6f} радиан")
 
 
-# # robot.set_inverse(XGBoostIK)
-# # robot.ik_solver.angle_limits = angle_limits
-# # robot.ik_solver.train()
+# Другие алгоритмы и ML — готовые сценарии в каталоге examples/ (из корня репозитория):
+#   python examples/genetic_ik.py
+#   python examples/ddpg_ik.py
+#   python examples/ml_rf_ik.py
+#   python examples/ml_xgb_ik.py
+#   python examples/ml_nn_ik.py
 #
-# robot.set_inverse(ForwardNeuralIK,
-#                   layers=[12, 100, 100, 100, 100, 7]
-#                   )
-# robot.ik_solver.angle_limits = angle_limits
-# robot.ik_solver.train()
+# Тюнинг DDPG (сетка гиперпараметров): python main_ddpg_tune.py
 #
-# angles, metrics = robot.solve(target)
-# robot.visualize(angles, target=target)
-# #
-# # angles_refined, _ = robot.op_solve(angles, target)
-# # robot.visualize(angles_refined, target=target)
-#
-# # robot.set_inverse(RandomForestIK)
-# # robot.ik_solver.angle_limits = angle_limits
-# # robot.ik_solver.n_estimators = 200
-# # robot.ik_solver.max_depth = 24
-# # robot.ik_solver.dataset_size = 10000
-# # robot.ik_solver.train()
-# #
-# # angles, metrics = robot.solve(target)
-# # robot.visualize(angles, target=target)
-# #
-# # angles_refined, _ = robot.op_solve(angles, target)
-# # robot.visualize(angles_refined, target=target)
+# ML: датасет по сетке суставов — robot.ik_solver.generate_dataset_grid(
+#     angle_limits, joint_value_grid={0: [...], 1: [...]}, default_angles=...)
+# см. examples/ml_rf_ik.py

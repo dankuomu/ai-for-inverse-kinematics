@@ -7,6 +7,7 @@ import logging
 import random
 import os
 import matplotlib.pyplot as plt
+from itertools import product
 from PIL import Image
 from collections import deque
 from typing import List, Tuple, Optional, Dict, Any
@@ -422,6 +423,11 @@ class DDPGIK(InverseKinematics):
             if hasattr(self, k):
                 setattr(self, k, v)
 
+        if "orientation_weight" in kwargs and kwargs["orientation_weight"] is not None:
+            ow = float(kwargs["orientation_weight"])
+            self.error_weight_mode = "constant"
+            self.constant_orientation_weight = float(np.clip(ow, 0.0, 1.0))
+
         self._build_networks()
 
         self.reward_history = []
@@ -566,6 +572,72 @@ class DDPGIK(InverseKinematics):
             self.save_weights()
 
         return self.best_angles, metrics
+
+    def tune(self, targets: List[Coords], param_grid: Dict[str, List[Any]]) -> Dict[str, Any]:
+        """
+        Сетка гиперпараметров (декартово произведение списков в ``param_grid``).
+        Для каждого набора — ``solve`` на всех ``targets``; критерий — минимум среднего
+        ``_combined_task_error(position_error, orientation_error)``.
+
+        На время перебора отключаются сохранение/загрузка весов и сохранение кадров эпизодов,
+        чтобы не затирать чекпоинт и не плодить PNG.
+        Лучший набор попадает в ``self.best_params``.
+        """
+        if not targets:
+            raise ValueError("targets не должен быть пустым")
+        if not param_grid:
+            raise ValueError("param_grid не должен быть пустым")
+        keys = list(param_grid.keys())
+        for k in keys:
+            if k == "orientation_weight":
+                continue
+            if not hasattr(self, k):
+                raise ValueError(f"Неизвестный параметр тюнинга для DDPGIK: {k}")
+
+        orig_save = self.save_weights_after_run
+        orig_load = self.load_weights_if_exist
+        orig_images = self.save_episode_images
+        self.save_weights_after_run = False
+        self.load_weights_if_exist = False
+        self.save_episode_images = False
+
+        best_mean = np.inf
+        best_combo: Dict[str, Any] = {}
+        history: List[Dict[str, Any]] = []
+
+        try:
+            for vals in product(*(param_grid[k] for k in keys)):
+                combo = dict(zip(keys, vals))
+                total = 0.0
+                per_target: List[float] = []
+                for target in targets:
+                    _, metrics = self.solve(target, **combo)
+                    pe = metrics.get("position_error")
+                    oe = metrics.get("orientation_error")
+                    if pe is None:
+                        pe = np.inf
+                    if oe is None:
+                        oe = 0.0
+                    ce = self._combined_task_error(float(pe), float(oe))
+                    total += ce
+                    per_target.append(ce)
+                mean_ce = total / len(targets)
+                history.append({"params": dict(combo), "mean_combined_error": mean_ce, "per_target": per_target})
+                self.logger.info(f"tune DDPGIK {combo} -> mean_combined={mean_ce:.6f}")
+                if mean_ce < best_mean:
+                    best_mean = mean_ce
+                    best_combo = dict(combo)
+        finally:
+            self.save_weights_after_run = orig_save
+            self.load_weights_if_exist = orig_load
+            self.save_episode_images = orig_images
+
+        self.best_params = best_combo
+        return {
+            "best_params": best_combo,
+            "best_mean_combined_error": best_mean,
+            "history": history,
+        }
 
     def _visualize_episode(self, episode: int, best_angles: np.ndarray):
         fig = plt.figure(figsize=(18, 6))
