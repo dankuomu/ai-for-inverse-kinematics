@@ -126,7 +126,108 @@ class Robot:
 
         return np.array(positions)
 
-    def visualize(self, angles, target=None, ax=None, show=True, obstacles=None):
+    def get_joint_frames(self, angles):
+        """
+        Возвращает мировые преобразования для каждого сустава (включая базу).
+
+        :param angles: Список углов вращения для каждого сустава
+        :return: Список матриц 4x4 длиной N+1
+        """
+        if len(angles) != len(self.dh_params):
+            raise ValueError("Количество углов должно совпадать с количеством звеньев")
+
+        frames = [np.eye(4)]
+        T = np.eye(4)
+        for i, angle in enumerate(angles):
+            a, alpha, d = self.dh_params[i]
+            theta = angle
+
+            ct = np.cos(theta)
+            st = np.sin(theta)
+            ca = np.cos(alpha)
+            sa = np.sin(alpha)
+
+            Ti = np.array([
+                [ct, -st * ca, st * sa, a * ct],
+                [st, ct * ca, -ct * sa, a * st],
+                [0, sa, ca, d],
+                [0, 0, 0, 1]
+            ])
+            T = T @ Ti
+            frames.append(T.copy())
+        return frames
+
+    @staticmethod
+    def _rotation_matrix_from_z_to_axis(axis):
+        z_axis = np.array([0.0, 0.0, 1.0])
+        axis = np.asarray(axis, dtype=float)
+        axis_norm = np.linalg.norm(axis)
+        if axis_norm < 1e-12:
+            return np.eye(3)
+        axis = axis / axis_norm
+
+        cos_angle = np.dot(z_axis, axis)
+        if cos_angle > 1.0 - 1e-9:
+            return np.eye(3)
+        if cos_angle < -1.0 + 1e-9:
+            return np.array([
+                [1.0, 0.0, 0.0],
+                [0.0, -1.0, 0.0],
+                [0.0, 0.0, -1.0]
+            ])
+
+        v = np.cross(z_axis, axis)
+        s = np.linalg.norm(v)
+        kmat = np.array([
+            [0.0, -v[2], v[1]],
+            [v[2], 0.0, -v[0]],
+            [-v[1], v[0], 0.0]
+        ])
+        return np.eye(3) + kmat + kmat @ kmat * ((1.0 - cos_angle) / (s ** 2))
+
+    def _plot_sphere(self, ax, center, radius, color='black', alpha=1.0, resolution=24):
+        u, v = np.mgrid[0:2 * np.pi:complex(0, resolution), 0:np.pi:complex(0, max(8, resolution // 2))]
+        x = center[0] + radius * np.cos(u) * np.sin(v)
+        y = center[1] + radius * np.sin(u) * np.sin(v)
+        z = center[2] + radius * np.cos(v)
+        ax.plot_surface(x, y, z, color=color, alpha=alpha, linewidth=0, antialiased=True, shade=True)
+
+    def _plot_cylinder(self, ax, p1, p2, radius, color='#f1c40f', alpha=1.0, resolution=24):
+        p1 = np.asarray(p1, dtype=float)
+        p2 = np.asarray(p2, dtype=float)
+        segment = p2 - p1
+        length = np.linalg.norm(segment)
+        if length < 1e-12:
+            return
+
+        rotation = self._rotation_matrix_from_z_to_axis(segment)
+        z = np.linspace(0.0, length, resolution)
+        theta = np.linspace(0.0, 2.0 * np.pi, resolution)
+        theta_grid, z_grid = np.meshgrid(theta, z)
+
+        x_grid = radius * np.cos(theta_grid)
+        y_grid = radius * np.sin(theta_grid)
+        xyz = np.vstack([x_grid.ravel(), y_grid.ravel(), z_grid.ravel()])
+        xyz_rot = rotation @ xyz
+
+        x = xyz_rot[0, :].reshape(x_grid.shape) + p1[0]
+        y = xyz_rot[1, :].reshape(y_grid.shape) + p1[1]
+        z = xyz_rot[2, :].reshape(z_grid.shape) + p1[2]
+        ax.plot_surface(x, y, z, color=color, alpha=alpha, linewidth=0, antialiased=True, shade=True)
+
+    def visualize(
+            self,
+            angles,
+            target=None,
+            ax=None,
+            show=True,
+            obstacles=None,
+            style='model',
+            link_radius=0.03,
+            joint_radius=0.04,
+            zero_link_length=0.06,
+            mesh_resolution=24,
+    ):
         """
         Визуализация робота, целевой точки, систем координат и препятствий.
 
@@ -135,6 +236,11 @@ class Robot:
         :param ax: Существующие оси matplotlib (если None, создаются новые)
         :param show: Флаг немедленного показа графика
         :param obstacles: Список объектов препятствий (Sphere, Capsule, Box)
+        :param style: Стиль отрисовки ('model' или 'line')
+        :param link_radius: Радиус цилиндров звеньев в режиме model
+        :param joint_radius: Радиус сфер суставов в режиме model
+        :param zero_link_length: Видимая длина звена-спейсера для нулевого сегмента
+        :param mesh_resolution: Разрешение сетки для поверхностей в режиме model
         """
         if ax is None:
             fig = plt.figure(figsize=(10, 8))
@@ -145,6 +251,7 @@ class Robot:
 
         # Позиции суставов
         joint_positions = self.get_joint_positions(angles)
+        joint_frames = self.get_joint_frames(angles)
 
         # Энд-эффектор
         end_effector_coords = self.forward_kinematics(angles)
@@ -152,8 +259,62 @@ class Robot:
         end_effector_orientation = end_effector_coords.rot_matrix
 
         # Звенья робота
-        ax.plot(joint_positions[:, 0], joint_positions[:, 1], joint_positions[:, 2],
-                'o-', linewidth=2, markersize=5, label='Робот', color='orange')
+        rendered_points = []
+        if style == 'line':
+            ax.plot(
+                joint_positions[:, 0], joint_positions[:, 1], joint_positions[:, 2],
+                'o-', linewidth=2, markersize=5, label='Робот', color='orange'
+            )
+        elif style == 'model':
+            link_color = '#f1c40f'
+            joint_color = 'black'
+
+            for joint_pos in joint_positions:
+                self._plot_sphere(
+                    ax,
+                    center=joint_pos,
+                    radius=joint_radius,
+                    color=joint_color,
+                    alpha=1.0,
+                    resolution=mesh_resolution
+                )
+
+            for i in range(len(joint_positions) - 1):
+                p1 = joint_positions[i]
+                p2 = joint_positions[i + 1]
+                seg = p2 - p1
+                seg_len = np.linalg.norm(seg)
+
+                if seg_len < 1e-9:
+                    axis = joint_frames[i][:3, 2]
+                    axis_norm = np.linalg.norm(axis)
+                    if axis_norm < 1e-12:
+                        axis = np.array([0.0, 0.0, 1.0])
+                    else:
+                        axis = axis / axis_norm
+
+                    half_len = 0.5 * zero_link_length
+                    vis_p1 = p1 - axis * half_len
+                    vis_p2 = p1 + axis * half_len
+                else:
+                    vis_p1 = p1
+                    vis_p2 = p2
+
+                self._plot_cylinder(
+                    ax,
+                    p1=vis_p1,
+                    p2=vis_p2,
+                    radius=link_radius,
+                    color=link_color,
+                    alpha=1.0,
+                    resolution=mesh_resolution
+                )
+                rendered_points.extend([vis_p1, vis_p2])
+
+            ax.plot([], [], [], color=link_color, linewidth=6, label='Звенья (цилиндры)')
+            ax.plot([], [], [], marker='o', linestyle='', color=joint_color, markersize=8, label='Суставы (сферы)')
+        else:
+            raise ValueError("style должен быть 'model' или 'line'")
 
         # Системы координат энд-эффектора
         axis_length = 0.1
@@ -207,6 +368,8 @@ class Robot:
         ax.grid(True)
 
         all_points = joint_positions.copy()
+        if rendered_points:
+            all_points = np.vstack([all_points, np.asarray(rendered_points)])
         if target_point is not None:
             all_points = np.vstack([all_points, target_point.reshape(1, -1)])
             for i in range(3):
@@ -221,6 +384,7 @@ class Robot:
             all_points[:, 1].max() - all_points[:, 1].min(),
             all_points[:, 2].max() - all_points[:, 2].min()
         ]) * 1.0
+        max_range = max(max_range, 0.1)
         mid_x = (all_points[:, 0].max() + all_points[:, 0].min()) * 0.5
         mid_y = (all_points[:, 1].max() + all_points[:, 1].min()) * 0.5
         mid_z = (all_points[:, 2].max() + all_points[:, 2].min()) * 0.5
