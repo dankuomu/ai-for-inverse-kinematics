@@ -20,14 +20,15 @@ from robots.utils import Coords, Sphere
 L_UPPER = 0.5
 L_FOREARM = 0.5
 L_WRIST = 0.20
+L_SUSTA = 0.1
 
 DH_PARAMETERS = [
-    (0.0, np.pi / 2, 0.0),
-    (0.0, -np.pi / 2, 0.0),
+    (L_SUSTA, np.pi / 2, 0.0),
+    (L_SUSTA, -np.pi / 2, 0.0),
     (L_UPPER, 0.0, 0.0),
     (L_FOREARM, 0.0, 0.0),
-    (0.0, np.pi / 2, 0.0),
-    (0.0, -np.pi / 2, 0.0),
+    (L_SUSTA, np.pi / 2, 0.0),
+    (L_SUSTA, -np.pi / 2, 0.0),
     (L_WRIST, 0.0, 0.0),
 ]
 

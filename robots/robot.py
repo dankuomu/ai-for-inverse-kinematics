@@ -161,12 +161,16 @@ class Robot:
     def _rotation_matrix_from_z_to_axis(axis):
         z_axis = np.array([0.0, 0.0, 1.0])
         axis = np.asarray(axis, dtype=float)
+        if not np.all(np.isfinite(axis)):
+            return np.eye(3)
         axis_norm = np.linalg.norm(axis)
-        if axis_norm < 1e-12:
+        if (not np.isfinite(axis_norm)) or axis_norm < 1e-12:
             return np.eye(3)
         axis = axis / axis_norm
 
         cos_angle = np.dot(z_axis, axis)
+        if not np.isfinite(cos_angle):
+            return np.eye(3)
         if cos_angle > 1.0 - 1e-9:
             return np.eye(3)
         if cos_angle < -1.0 + 1e-9:
@@ -178,6 +182,8 @@ class Robot:
 
         v = np.cross(z_axis, axis)
         s = np.linalg.norm(v)
+        if (not np.isfinite(s)) or s < 1e-9:
+            return np.eye(3)
         kmat = np.array([
             [0.0, -v[2], v[1]],
             [v[2], 0.0, -v[0]],
@@ -186,34 +192,60 @@ class Robot:
         return np.eye(3) + kmat + kmat @ kmat * ((1.0 - cos_angle) / (s ** 2))
 
     def _plot_sphere(self, ax, center, radius, color='black', alpha=1.0, resolution=24):
+        center = np.asarray(center, dtype=float)
+        if not np.all(np.isfinite(center)):
+            return
         u, v = np.mgrid[0:2 * np.pi:complex(0, resolution), 0:np.pi:complex(0, max(8, resolution // 2))]
         x = center[0] + radius * np.cos(u) * np.sin(v)
         y = center[1] + radius * np.sin(u) * np.sin(v)
         z = center[2] + radius * np.cos(v)
-        ax.plot_surface(x, y, z, color=color, alpha=alpha, linewidth=0, antialiased=True, shade=True)
+        ax.plot_surface(x, y, z, color=color, alpha=alpha, linewidth=0, antialiased=True, shade=False)
 
     def _plot_cylinder(self, ax, p1, p2, radius, color='#f1c40f', alpha=1.0, resolution=24):
         p1 = np.asarray(p1, dtype=float)
         p2 = np.asarray(p2, dtype=float)
+        if (not np.all(np.isfinite(p1))) or (not np.all(np.isfinite(p2))):
+            return
         segment = p2 - p1
         length = np.linalg.norm(segment)
-        if length < 1e-12:
+        if (not np.isfinite(length)) or length < 1e-12:
             return
 
-        rotation = self._rotation_matrix_from_z_to_axis(segment)
+        axis = segment / length
+        helper = np.array([1.0, 0.0, 0.0]) if abs(axis[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+        basis_u = np.cross(axis, helper)
+        basis_u_norm = np.linalg.norm(basis_u)
+        if basis_u_norm < 1e-12:
+            helper = np.array([0.0, 0.0, 1.0])
+            basis_u = np.cross(axis, helper)
+            basis_u_norm = np.linalg.norm(basis_u)
+            if basis_u_norm < 1e-12:
+                return
+        basis_u = basis_u / basis_u_norm
+        basis_v = np.cross(axis, basis_u)
+
         z = np.linspace(0.0, length, resolution)
         theta = np.linspace(0.0, 2.0 * np.pi, resolution)
         theta_grid, z_grid = np.meshgrid(theta, z)
+        cos_t = np.cos(theta_grid)
+        sin_t = np.sin(theta_grid)
 
-        x_grid = radius * np.cos(theta_grid)
-        y_grid = radius * np.sin(theta_grid)
-        xyz = np.vstack([x_grid.ravel(), y_grid.ravel(), z_grid.ravel()])
-        xyz_rot = rotation @ xyz
-
-        x = xyz_rot[0, :].reshape(x_grid.shape) + p1[0]
-        y = xyz_rot[1, :].reshape(y_grid.shape) + p1[1]
-        z = xyz_rot[2, :].reshape(z_grid.shape) + p1[2]
-        ax.plot_surface(x, y, z, color=color, alpha=alpha, linewidth=0, antialiased=True, shade=True)
+        x = (
+            p1[0]
+            + axis[0] * z_grid
+            + radius * (basis_u[0] * cos_t + basis_v[0] * sin_t)
+        )
+        y = (
+            p1[1]
+            + axis[1] * z_grid
+            + radius * (basis_u[1] * cos_t + basis_v[1] * sin_t)
+        )
+        z = (
+            p1[2]
+            + axis[2] * z_grid
+            + radius * (basis_u[2] * cos_t + basis_v[2] * sin_t)
+        )
+        ax.plot_surface(x, y, z, color=color, alpha=alpha, linewidth=0, antialiased=True, shade=False)
 
     def visualize(
             self,
@@ -223,8 +255,10 @@ class Robot:
             show=True,
             obstacles=None,
             style='model',
-            link_radius=0.03,
-            joint_radius=0.04,
+            link_radius=0.02,
+            joint_radius=0.02,
+            joint_length=0.06,
+            first_joint_extra_down=0.03,
             zero_link_length=0.06,
             mesh_resolution=24,
     ):
@@ -238,7 +272,9 @@ class Robot:
         :param obstacles: Список объектов препятствий (Sphere, Capsule, Box)
         :param style: Стиль отрисовки ('model' или 'line')
         :param link_radius: Радиус цилиндров звеньев в режиме model
-        :param joint_radius: Радиус сфер суставов в режиме model
+        :param joint_radius: Радиус цилиндров суставов в режиме model
+        :param joint_length: Длина цилиндров суставов в режиме model
+        :param first_joint_extra_down: Дополнительное продление первого сустава вниз к основанию
         :param zero_link_length: Видимая длина звена-спейсера для нулевого сегмента
         :param mesh_resolution: Разрешение сетки для поверхностей в режиме model
         """
@@ -269,15 +305,29 @@ class Robot:
             link_color = '#f1c40f'
             joint_color = 'black'
 
-            for joint_pos in joint_positions:
-                self._plot_sphere(
+            half_joint_len = 0.5 * joint_length
+            for i, joint_pos in enumerate(joint_positions):
+                joint_axis = joint_frames[i][:3, 2]
+                axis_norm = np.linalg.norm(joint_axis)
+                if axis_norm < 1e-12:
+                    joint_axis = np.array([0.0, 0.0, 1.0])
+                else:
+                    joint_axis = joint_axis / axis_norm
+
+                joint_p1 = joint_pos - joint_axis * half_joint_len
+                joint_p2 = joint_pos + joint_axis * half_joint_len
+                if i == 0:
+                    joint_p1 = joint_p1 - joint_axis * max(first_joint_extra_down, 0.0)
+                self._plot_cylinder(
                     ax,
-                    center=joint_pos,
-                    radius=joint_radius,
+                    p1=joint_p1,
+                    p2=joint_p2,
+                    radius=max(joint_radius, 1e-6),
                     color=joint_color,
                     alpha=1.0,
                     resolution=mesh_resolution
                 )
+                rendered_points.extend([joint_p1, joint_p2])
 
             for i in range(len(joint_positions) - 1):
                 p1 = joint_positions[i]
@@ -312,7 +362,7 @@ class Robot:
                 rendered_points.extend([vis_p1, vis_p2])
 
             ax.plot([], [], [], color=link_color, linewidth=6, label='Звенья (цилиндры)')
-            ax.plot([], [], [], marker='o', linestyle='', color=joint_color, markersize=8, label='Суставы (сферы)')
+            ax.plot([], [], [], color=joint_color, linewidth=6, label='Суставы (цилиндры)')
         else:
             raise ValueError("style должен быть 'model' или 'line'")
 
