@@ -2,6 +2,8 @@ numpy
 matplotlib
 tqdm
 pillow
+imageio[ffmpeg]
+pytest
 
 # RF
 scikit-learn
