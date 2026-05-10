@@ -254,7 +254,7 @@ class Robot:
             ax=None,
             show=True,
             obstacles=None,
-            style='model',
+            style='line',
             link_radius=0.02,
             joint_radius=0.02,
             joint_length=0.06,
