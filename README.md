@@ -6,12 +6,14 @@
 
 ## Зачем этот репозиторий
 
-| Задача | Что внутри |
-|--------|------------|
-| Понять, как ведёт себя IK на одной сцене | [`examples/common.py`](examples/common.py) — DH, лимиты углов, цель, сферы |
-| Обучить / сравнить методы | Genetic, **DDPG**, Random Forest, **XGBoost**, MLP |
-| Прогнать честное сравнение | [`tests/test_ik_benchmark_table.py`](tests/test_ik_benchmark_table.py) — таблица MSE, ошибок FK, времени |
-| Снять ролик для през | MP4 только с **3D-манипулятором** → `plots/*.mp4` |
+
+| Задача                                   | Что внутри                                                                                               |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Понять, как ведёт себя IK на одной сцене | `[examples/common.py](examples/common.py)` — DH, лимиты углов, цель, сферы                               |
+| Обучить / сравнить методы                | Genetic, **DDPG**, Random Forest, **XGBoost**, MLP                                                       |
+| Прогнать честное сравнение               | `[tests/test_ik_benchmark_table.py](tests/test_ik_benchmark_table.py)` — таблица MSE, ошибок FK, времени |
+| Снять ролик для през                     | MP4 только с **3D-манипулятором** → `plots/*.mp4`                                                        |
+
 
 ---
 
@@ -26,7 +28,7 @@ scikit-learn
 XGBoost (деревья)
 ```
 
-Полный список: [`requirements.txt`](requirements.txt).
+Полный список: `[requirements.txt](requirements.txt)`.
 
 ---
 
@@ -52,15 +54,17 @@ export MPLBACKEND=Agg   # headless / без всплывающих окон
 
 ### Примеры
 
-| Команда | Результат |
-|---------|-----------|
-| `python examples/genetic_ik.py` | Genetic IK + кадры в `plots/genetic_frames/` + **`plots/genetic_approach.mp4`** |
-| `python examples/ddpg_ik.py` | DDPG + **`plots/ddpg_training_curve.png`** + кадры + **`plots/ddpg_approach.mp4`** |
-| `python examples/ml_xgb_ik.py` | XGBoost, датасет по сетке + **`plots/xgb_approach.mp4`** |
-| `python examples/ml_rf_ik.py` | Random Forest IK |
-| `python examples/ml_nn_ik.py` | MLP IK (PyTorch) |
 
-Кинематика, цель и препятствия централизованы в [`examples/common.py`](examples/common.py). Подробнее — [`examples/README.md`](examples/README.md).
+| Команда                         | Результат                                                                          |
+| ------------------------------- | ---------------------------------------------------------------------------------- |
+| `python examples/genetic_ik.py` | Genetic IK + кадры в `plots/genetic_frames/` + `**plots/genetic_approach.mp4**`    |
+| `python examples/ddpg_ik.py`    | DDPG + `**plots/ddpg_training_curve.png**` + кадры + `**plots/ddpg_approach.mp4**` |
+| `python examples/ml_xgb_ik.py`  | XGBoost, датасет по сетке + `**plots/xgb_approach.mp4**`                           |
+| `python examples/ml_rf_ik.py`   | Random Forest IK                                                                   |
+| `python examples/ml_nn_ik.py`   | MLP IK (PyTorch)                                                                   |
+
+
+Кинематика, цель и препятствия централизованы в `[examples/common.py](examples/common.py)`. Подробнее — `[examples/README.md](examples/README.md)`.
 
 ### Классические входы
 
@@ -94,23 +98,27 @@ flowchart LR
   R --> LM
 ```
 
-- **`robots/`** — DH, FK, `solve` → делегирует в текущий `ik_solver`, `visualize`, `op_solve`.
-- **`control/IK/`** — все решатели + [`ml_dataset.py`](control/IK/ml_dataset.py) (X/y из FK), [`video_export.py`](control/IK/video_export.py) (сборка MP4 из PNG).
-- **`control/core/`** — базовый генетический оптимизатор.
-- **`examples/`** — воспроизводимые сценарии и `plots/` (git не обязан трекать — генерируется локально).
+
+
+- `**robots/**` — DH, FK, `solve` → делегирует в текущий `ik_solver`, `visualize`, `op_solve`.
+- `**control/IK/**` — все решатели + `[ml_dataset.py](control/IK/ml_dataset.py)` (X/y из FK), `[video_export.py](control/IK/video_export.py)` (сборка MP4 из PNG).
+- `**control/core/**` — базовый генетический оптимизатор.
+- `**examples/**` — воспроизводимые сценарии и `plots/` (git не обязан трекать — генерируется локально).
 
 ---
 
 ## Сравнение методов
 
-| Метод | Идея | Когда заходит |
-|-------|------|-----------------|
-| **Genetic** | Популяция + мутации, штраф за препятствия и сглаживание по углам | Нужен работающий baseline без нейросети |
-| **DDPG** | Online RL: состояние = углы + ошибка до цели, награда как у генетики | Есть torch, хочется policy под конкретную сцену |
-| **RF / XGBoost** | Supervised: `(pose, R)` → углы с датасета FK | Много офлайн-сэмплов, быстрый инференс |
-| **MLP** | То же, но нейросеть | GPU/батчи, гладкая аппроксимация |
 
-Уточнение конфигурации после любого IK: **`robot.op_solve(angles, target, obstacles=...)`** (Levenberg–Marquardt).
+| Метод            | Идея                                                                 | Когда заходит                                   |
+| ---------------- | -------------------------------------------------------------------- | ----------------------------------------------- |
+| **Genetic**      | Популяция + мутации, штраф за препятствия и сглаживание по углам     | Нужен работающий baseline без нейросети         |
+| **DDPG**         | Online RL: состояние = углы + ошибка до цели, награда как у генетики | Есть torch, хочется policy под конкретную сцену |
+| **RF / XGBoost** | Supervised: `(pose, R)` → углы с датасета FK                         | Много офлайн-сэмплов, быстрый инференс          |
+| **MLP**          | То же, но нейросеть                                                  | GPU/батчи, гладкая аппроксимация                |
+
+
+Уточнение конфигурации после любого IK: `**robot.op_solve(angles, target, obstacles=...)`** (Levenberg–Marquardt).
 
 ---
 
@@ -178,6 +186,5 @@ rl-for-robots/
 └── cosmic_stuff/
     └── robot.py              # сторонний/экспериментальный вариант робота (не основной API)
 ```
-
 
 *Если репозиторий оказался полезен — звезда на GitHub или PR с улучшением бенчмарка сделают автора чуть счастливее.*
