@@ -17,18 +17,20 @@ if str(_ROOT) not in sys.path:
 from robots.robot import Robot
 from robots.utils import Coords, Sphere
 
+# Длины плеча / предплечья / кисти как в main; по a — короткие «суставные» сегменты
+# (чуть-чуть, чтобы цилиндры в 3D не слипались в одну линию), заметно меньше старых 0.1 м.
 L_UPPER = 0.5
 L_FOREARM = 0.5
 L_WRIST = 0.20
-L_SUSTA = 0.1
+JOINT_LINK_A = 0.2
 
 DH_PARAMETERS = [
-    (L_SUSTA, np.pi / 2, 0.0),
-    (L_SUSTA, -np.pi / 2, 0.0),
+    (JOINT_LINK_A, np.pi / 2, 0.0),
+    (JOINT_LINK_A, -np.pi / 2, 0.0),
     (L_UPPER, 0.0, 0.0),
     (L_FOREARM, 0.0, 0.0),
-    (L_SUSTA, np.pi / 2, 0.0),
-    (L_SUSTA, -np.pi / 2, 0.0),
+    (JOINT_LINK_A, np.pi / 2, 0.0),
+    (JOINT_LINK_A, -np.pi / 2, 0.0),
     (L_WRIST, 0.0, 0.0),
 ]
 
@@ -47,11 +49,21 @@ DEFAULT_TARGET = Coords(
     np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]]),
 )
 
+# Сферы поменьше и чуть разнесены (меньше перекрытий и «шумной» зоны вокруг цели).
+OBSTACLE_RADIUS = 0.1
 DEFAULT_OBSTACLES = [
-    Sphere(Coords([0.2, 0.0, 0.0]), 0.1),
-    Sphere(Coords([0.0, -0.2, 0.2]), 0.1),
-    Sphere(Coords([0.0, 0.2, 0.2]), 0.1),
+    Sphere(Coords([0.26, 0.06, 0.02]), OBSTACLE_RADIUS),
 ]
+
+# Результат tune DDPG (можно распаковать в set_inverse: **DDPG_TUNED_KWARGS)
+DDPG_TUNED_KWARGS = {
+    "actor_lr": 1e-4,
+    "critic_lr": 5e-4,
+    "action_scale": 0.06,
+    "noise_sigma": 0.15,
+    "exp_weight_alpha": 4.0,
+    "tau": 0.005,
+}
 
 
 def make_robot() -> Robot:
