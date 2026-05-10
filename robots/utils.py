@@ -327,6 +327,12 @@ class Obstacle:
         """
         raise NotImplementedError("Метод должен быть реализован в наследниках")
 
+    def distance_to_point(self, point: np.ndarray) -> float:
+        """
+        Знаковое расстояние до поверхности тела: отрицательно внутри (для штрафов в op_solve).
+        """
+        raise NotImplementedError("Метод должен быть реализован в наследниках")
+
     def visualize(self, ax: Axes3D, color='r', alpha=0.3):
         """Визуализирует препятствие в 3D"""
         raise NotImplementedError("Метод должен быть реализован в наследниках")
@@ -341,6 +347,10 @@ class Sphere(Obstacle):
         d_center = Obstacle._dist_seg_to_seg(seg_1.pos, seg_2.pos,
                                              self.center.pos, self.center.pos)
         return max(0.0, d_center - self.radius)
+
+    def distance_to_point(self, point: np.ndarray) -> float:
+        p = np.asarray(point, dtype=float)
+        return float(np.linalg.norm(p - self.center.pos) - self.radius)
 
     def visualize(self, ax: Axes3D, color='r', alpha=0.3):
         u, v = np.mgrid[0:2*np.pi:30j, 0:np.pi:15j]
@@ -361,7 +371,7 @@ class Capsule(Obstacle):
     @property
     def world_axis(self) -> np.ndarray:
         """Ось капсулы в мировых координатах (с учётом поворота центра)."""
-        return self.center.rot @ self.local_axis
+        return self.center.rot_matrix @ self.local_axis
 
     def dist_to_me(self, seg_1: Coords, seg_2: Coords) -> float:
         axis = self.world_axis
@@ -370,6 +380,21 @@ class Capsule(Obstacle):
         c2 = self.center.pos + half_h * axis
         d_line = Obstacle._dist_seg_to_seg(seg_1.pos, seg_2.pos, c1, c2)
         return max(0.0, d_line - self.radius)
+
+    def distance_to_point(self, point: np.ndarray) -> float:
+        p = np.asarray(point, dtype=float)
+        axis = self.world_axis
+        half_h = self.height / 2
+        c0 = self.center.pos - half_h * axis
+        c1 = self.center.pos + half_h * axis
+        seg = c1 - c0
+        denom = float(np.dot(seg, seg))
+        if denom < 1e-18:
+            return float(np.linalg.norm(p - self.center.pos) - self.radius)
+        t = float(np.dot(p - c0, seg)) / denom
+        t = np.clip(t, 0.0, 1.0)
+        closest = c0 + t * seg
+        return float(np.linalg.norm(p - closest) - self.radius)
 
     def visualize(self, ax: Axes3D, color='r', alpha=0.3, resolution=30):
         def rotation_matrix_from_z_to_axis(axis):
