@@ -3,10 +3,10 @@ import time
 import matplotlib.pyplot as plt
 import os
 from itertools import product
-from PIL import Image
 from typing import List, Tuple, Optional, Dict, Any
 from robots.utils import Coords, Obstacle
 from control.IK.ik_base import InverseKinematics
+from control.IK.video_export import frames_dir_to_mp4
 from control.core.genetic_base import GeneticOptimizer
 import logging
 
@@ -283,28 +283,14 @@ class GeneticIK(InverseKinematics):
 
     def visualize_generation(self, generation: int, best_individual: np.ndarray,
                              position_errors: List[float], orientation_errors: List[float]):
-        fig = plt.figure(figsize=(18, 6))
-
-        ax1 = fig.add_subplot(131, projection='3d')
+        # Кадры для MP4: только 3D-манипулятор (без графиков ошибок).
+        fig = plt.figure(figsize=(10, 10))
+        ax1 = fig.add_subplot(111, projection='3d')
         self.robot.visualize(best_individual, target=self.target, ax=ax1, show=False)
         if self.obstacles:
             for obs in self.obstacles:
                 obs.visualize(ax1)
-        ax1.set_title(f'Generation {generation}\n'
-                      f'Position Error: {position_errors[-1]:.6f}\n'
-                      f'Orientation Error: {orientation_errors[-1]:.6f}')
-
-        ax2 = fig.add_subplot(132)
-        gens = list(range(1, len(position_errors) + 1))
-        ax2.plot(gens, position_errors, 'b-', label='Position Error', linewidth=2)
-        ax2.plot(gens, orientation_errors, 'r-', label='Orientation Error', linewidth=2)
-        ax2.axhline(y=self.position_tolerance, color='b', linestyle='--', alpha=0.7)
-        ax2.axhline(y=self.orientation_tolerance, color='r', linestyle='--', alpha=0.7)
-        ax2.set_xlabel('Generation')
-        ax2.set_ylabel('Error')
-        ax2.set_yscale('log')
-        ax2.grid(True, alpha=0.3)
-        ax2.legend()
+        ax1.set_title("")
 
         plt.tight_layout()
         if self.save_generation_images:
@@ -316,13 +302,9 @@ class GeneticIK(InverseKinematics):
             plt.show()
             return None
 
-    def create_animation(self, output_path: str = "genetic_ik_animation.gif", frame_interval: int = 100):
+    def create_animation(self, output_path: str = "genetic_ik_animation.mp4", frame_interval: int = 100):
         if not self.save_generation_images:
             print("save_generation_images=False → нет кадров")
             return
-        image_files = sorted([f for f in os.listdir(self.image_dir) if f.endswith('.png')])
-        images = [Image.open(os.path.join(self.image_dir, f)) for f in image_files]
-        if images:
-            images[0].save(output_path, save_all=True, append_images=images[1:],
-                           duration=frame_interval, loop=0)
-            print(f"Анимация сохранена как {output_path}")
+        if frames_dir_to_mp4(self.image_dir, output_path, frame_interval_ms=frame_interval):
+            print(f"Видео (MP4) сохранено: {output_path}")

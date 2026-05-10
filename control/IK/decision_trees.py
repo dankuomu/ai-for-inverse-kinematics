@@ -8,8 +8,9 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from xgboost import XGBRegressor
 
-from robots.utils import Coords
+from robots.utils import Coords, Obstacle
 from control.IK.ik_base import InverseKinematics
+from control.IK.video_export import frames_dir_to_mp4
 from control.IK.ml_dataset import (
     build_xy_from_robot,
     joint_grid_to_configurations,
@@ -202,6 +203,7 @@ class XGBoostIK(InverseKinematics):
 
         self._log = logger.getChild(self.__class__.__name__)
 
+        self.random_state = random_state
         self.test_size = test_size
         self.auto_train = auto_train
         self.dataset_size = dataset_size
@@ -257,7 +259,15 @@ class XGBoostIK(InverseKinematics):
     def generate_dataset(self, angle_limits: List[Tuple[float, float]], n_samples: int = 5000):
         return self.generate_dataset_random(angle_limits, n_samples)
 
-    def train(self, plot_learning_curve=True):
+    def train(
+        self,
+        plot_learning_curve: bool = True,
+        progression_target: Optional[Coords] = None,
+        progression_obstacles: Optional[List[Obstacle]] = None,
+        progression_frames_dir: Optional[str] = None,
+        progression_snapshots: int = 48,
+        progression_video_path: Optional[str] = None,
+    ):
         try:
             self.X
         except AttributeError:
@@ -285,6 +295,20 @@ class XGBoostIK(InverseKinematics):
         if plot_learning_curve:
             self._plot_learning_curve(X_train, y_train, X_test, y_test)
 
+        if progression_target is not None and progression_frames_dir:
+            self._save_xgb_tree_progression_frames(
+                progression_target,
+                progression_frames_dir,
+                progression_snapshots,
+                progression_obstacles,
+            )
+            if progression_video_path:
+                frames_dir_to_mp4(
+                    progression_frames_dir,
+                    progression_video_path,
+                    frame_interval_ms=150,
+                )
+
     def _plot_learning_curve(self, X_train, y_train, X_test, y_test, steps=10):
         sizes = np.linspace(0.1, 1.0, steps)
         train_err, test_err = [], []
@@ -305,6 +329,51 @@ class XGBoostIK(InverseKinematics):
         plt.grid(True)
         plt.legend()
         plt.show()
+
+    def _save_xgb_tree_progression_frames(
+        self,
+        target: Coords,
+        frames_dir: str,
+        snapshots: int,
+        obstacles: Optional[List[Obstacle]],
+    ) -> None:
+        """
+        Кадры «как робот подходит к цели» при наращивании числа деревьев бустинга
+        (предсказание через ``iteration_range`` без переобучения).
+        """
+        import xgboost as xgb
+
+        os.makedirs(frames_dir, exist_ok=True)
+        booster = self.model.get_booster()
+        n_rounds = int(booster.num_boosted_rounds())
+        if n_rounds < 1:
+            self._log.warning("XGB progression: нет деревьев после fit")
+            return
+
+        n_snap = max(1, min(int(snapshots), n_rounds))
+        ends = np.unique(np.linspace(1, n_rounds, num=n_snap, dtype=int))
+        X_row = np.concatenate([target.pos, target.rot_matrix.ravel()]).reshape(1, -1).astype(np.float32)
+        dm = xgb.DMatrix(X_row)
+
+        for end in ends:
+            end_i = int(end)
+            y_hat = booster.predict(dm, iteration_range=(0, end_i))
+            pred = np.asarray(y_hat, dtype=np.float64).reshape(-1)
+
+            fig = plt.figure(figsize=(10, 10))
+            ax1 = fig.add_subplot(111, projection="3d")
+            self.robot.visualize(pred, target=target, ax=ax1, show=False)
+            if obstacles:
+                for obs in obstacles:
+                    obs.visualize(ax1)
+            ax1.set_title("")
+
+            plt.tight_layout()
+            fn = os.path.join(frames_dir, f"tree_progress_{end_i:04d}.png")
+            plt.savefig(fn, dpi=100, bbox_inches="tight")
+            plt.close()
+
+        self._log.info("XGB progression: сохранено %s кадров в %s", len(ends), frames_dir)
 
     def solve(self, target: Coords, **kwargs):
         if not self.trained:

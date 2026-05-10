@@ -8,12 +8,12 @@ import random
 import os
 import matplotlib.pyplot as plt
 from itertools import product
-from PIL import Image
 from collections import deque
 from typing import List, Tuple, Optional, Dict, Any
 
 from robots.utils import Coords, Obstacle
 from control.IK.ik_base import InverseKinematics
+from control.IK.video_export import frames_dir_to_mp4
 
 
 class ReplayBuffer:
@@ -137,7 +137,9 @@ class DDPGIK(InverseKinematics):
                  weights_path: Optional[str] = None,
                  save_weights_after_run: bool = True,
                  load_weights_if_exist: bool = True,
-                 inference_starts: int = 64):
+                 inference_starts: int = 64,
+                 save_training_plot: bool = True,
+                 training_plot_path: str = "ddpg_training_curve.png"):
         super().__init__(robot)
 
         self.logger = logging.getLogger(__name__).getChild(self.__class__.__name__)
@@ -179,6 +181,8 @@ class DDPGIK(InverseKinematics):
         self.save_weights_after_run = save_weights_after_run
         self.load_weights_if_exist = load_weights_if_exist
         self.inference_starts = inference_starts
+        self.save_training_plot = save_training_plot
+        self.training_plot_path = training_plot_path
 
         self.n_joints = len(robot.dh_params)
         self.state_dim = self.n_joints + 6  # angles + pos_error(3) + orient_error(3)
@@ -193,6 +197,7 @@ class DDPGIK(InverseKinematics):
         self.best_fitness: float = -np.inf
 
         self.best_params = None
+        self.global_combined_history: List[float] = []
 
     def _build_networks(self):
         self.actor = Actor(self.state_dim, self.action_dim, self.hidden_dims).to(self.device)
@@ -433,6 +438,7 @@ class DDPGIK(InverseKinematics):
         self.reward_history = []
         self.position_error_history = []
         self.orientation_error_history = []
+        self.global_combined_history = []
         self.best_angles = None
         self.best_fitness = -np.inf
 
@@ -519,6 +525,12 @@ class DDPGIK(InverseKinematics):
             self.orientation_error_history.append(ep_orient_err)
             self.reward_history.append(episode_reward)
 
+            if self.best_angles is not None:
+                _, _, gpe, goe = self._calculate_errors(self.best_angles)
+                self.global_combined_history.append(self._combined_task_error(gpe, goe))
+            else:
+                self.global_combined_history.append(float("inf"))
+
             if self.save_episode_images and (
                     episode % max(1, self.episodes // 50) == 0 or episode == 0):
                 self._visualize_episode(episode, best_ep_angles)
@@ -552,6 +564,16 @@ class DDPGIK(InverseKinematics):
         trace_val = np.clip(0.5 * (np.trace(R_rel) - 1.0), -1.0, 1.0)
         final_orient_err = float(np.arccos(trace_val))
 
+        ep_combined = [
+            self._combined_task_error(float(p), float(o))
+            for p, o in zip(self.position_error_history, self.orientation_error_history)
+        ]
+        gc = np.array(
+            [v if np.isfinite(v) else np.inf for v in self.global_combined_history],
+            dtype=np.float64,
+        )
+        best_combined_running = np.minimum.accumulate(gc).tolist()
+
         metrics = {
             'total_time': total_time,
             'best_fitness': self.best_fitness,
@@ -561,15 +583,22 @@ class DDPGIK(InverseKinematics):
             'target_orientation': self.target.rot_matrix,
             'achieved_orientation': achieved.rot_matrix,
             'orientation_error': final_orient_err,
+            'combined_task_error': self._combined_task_error(final_pos_err, final_orient_err),
             'episodes_completed': len(self.reward_history),
             'total_steps': total_steps,
             'reward_history': self.reward_history,
             'position_error_history': self.position_error_history,
             'orientation_error_history': self.orientation_error_history,
+            'episode_best_combined_history': ep_combined,
+            'global_best_combined_history': list(gc),
+            'best_combined_running_min': best_combined_running,
         }
 
         if self.save_weights_after_run and self.weights_path and self.episodes > 0:
             self.save_weights()
+
+        if self.save_training_plot and self.episodes > 0 and self.position_error_history:
+            self._save_training_plot()
 
         return self.best_angles, metrics
 
@@ -639,52 +668,74 @@ class DDPGIK(InverseKinematics):
             "history": history,
         }
 
-    def _visualize_episode(self, episode: int, best_angles: np.ndarray):
-        fig = plt.figure(figsize=(18, 6))
+    def _save_training_plot(self) -> None:
+        """График ошибок по эпизодам (как у генетики) + лучший combined за всё обучение."""
+        n = len(self.position_error_history)
+        if n == 0:
+            return
+        ep = np.arange(1, n + 1)
+        ep_comb = [
+            self._combined_task_error(float(p), float(o))
+            for p, o in zip(self.position_error_history, self.orientation_error_history)
+        ]
+        gc = np.array(
+            [v if np.isfinite(v) else np.inf for v in self.global_combined_history[:n]],
+            dtype=np.float64,
+        )
+        if len(gc) < n:
+            gc = np.pad(gc, (0, n - len(gc)), constant_values=np.inf)
+        run_min = np.minimum.accumulate(gc)
 
-        ax1 = fig.add_subplot(131, projection='3d')
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+
+        ax1.plot(ep, self.position_error_history, "b-", label="pos (ep best step)", lw=1.5)
+        ax1.plot(ep, self.orientation_error_history, "r-", label="orient (ep best step)", lw=1.5)
+        ax1.plot(ep, ep_comb, "m-", label="combined (ep best step)", lw=1.2, alpha=0.85)
+        ax1.axhline(self.position_tolerance, color="b", ls="--", alpha=0.5)
+        ax1.axhline(self.orientation_tolerance, color="r", ls="--", alpha=0.5)
+        ax1.set_ylabel("ошибка")
+        ax1.set_yscale("log")
+        ax1.grid(True, alpha=0.3)
+        ax1.legend(loc="upper right", fontsize=8)
+        ax1.set_title("DDPG IK: ошибки по эпизодам (лучший шаг внутри эпизода)")
+
+        ax2.plot(ep, gc, "gray", ls=":", label="combined(global best углы)", lw=1.0, alpha=0.8)
+        ax2.plot(ep, run_min, "g-", label="лучший combined накопительно", lw=2)
+        ax2.set_xlabel("эпизод")
+        ax2.set_ylabel("combined task error")
+        ax2.set_yscale("log")
+        ax2.grid(True, alpha=0.3)
+        ax2.legend(loc="upper right", fontsize=8)
+        ax2.set_title("Лучший combined по глобальным углам + накопительный минимум")
+
+        plt.tight_layout()
+        out = self.training_plot_path
+        parent = os.path.dirname(os.path.abspath(out))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        plt.savefig(out, dpi=120, bbox_inches="tight")
+        plt.close()
+        self.logger.info(f"График обучения DDPG сохранён: {out}")
+
+    def _visualize_episode(self, episode: int, best_angles: np.ndarray):
+        # Кадры для MP4: только 3D-манипулятор.
+        fig = plt.figure(figsize=(10, 10))
+        ax1 = fig.add_subplot(111, projection='3d')
         self.robot.visualize(best_angles, target=self.target, ax=ax1, show=False)
         if self.obstacles:
             for obs in self.obstacles:
                 obs.visualize(ax1)
 
-        pos_err = self.position_error_history[-1] if self.position_error_history else 0
-        orient_err = self.orientation_error_history[-1] if self.orientation_error_history else 0
-        ax1.set_title(f'Episode {episode}\n'
-                      f'Position Error: {pos_err:.6f}\n'
-                      f'Orientation Error: {orient_err:.6f}')
-
-        ax2 = fig.add_subplot(132)
-        eps = list(range(1, len(self.position_error_history) + 1))
-        ax2.plot(eps, self.position_error_history, 'b-', label='Position Error', linewidth=2)
-        ax2.plot(eps, self.orientation_error_history, 'r-', label='Orientation Error', linewidth=2)
-        ax2.axhline(y=self.position_tolerance, color='b', linestyle='--', alpha=0.7)
-        ax2.axhline(y=self.orientation_tolerance, color='r', linestyle='--', alpha=0.7)
-        ax2.set_xlabel('Episode')
-        ax2.set_ylabel('Error')
-        ax2.set_yscale('log')
-        ax2.grid(True, alpha=0.3)
-        ax2.legend()
-
-        ax3 = fig.add_subplot(133)
-        ax3.plot(eps, self.reward_history[:len(eps)], 'g-', label='Episode Reward', linewidth=2)
-        ax3.set_xlabel('Episode')
-        ax3.set_ylabel('Reward')
-        ax3.grid(True, alpha=0.3)
-        ax3.legend()
+        ax1.set_title("")
 
         plt.tight_layout()
         filename = os.path.join(self.image_dir, f'episode_{episode:04d}.png')
         plt.savefig(filename, dpi=100, bbox_inches='tight')
         plt.close()
 
-    def create_animation(self, output_path: str = "ddpg_ik_animation.gif", frame_interval: int = 300):
+    def create_animation(self, output_path: str = "ddpg_ik_animation.mp4", frame_interval: int = 300):
         if not self.save_episode_images:
             print("save_episode_images=False → нет кадров")
             return
-        image_files = sorted([f for f in os.listdir(self.image_dir) if f.endswith('.png')])
-        images = [Image.open(os.path.join(self.image_dir, f)) for f in image_files]
-        if images:
-            images[0].save(output_path, save_all=True, append_images=images[1:],
-                           duration=frame_interval, loop=0)
-            print(f"Анимация сохранена как {output_path}")
+        if frames_dir_to_mp4(self.image_dir, output_path, frame_interval_ms=frame_interval):
+            print(f"Видео (MP4) сохранено: {output_path}")
