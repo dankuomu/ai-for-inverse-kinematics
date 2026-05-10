@@ -37,12 +37,13 @@ target_rotation = np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]])
 target = Coords(target_position, target_rotation)
 
 obstacles = [
-    Sphere(Coords([0.2, 0.0, 0.0]), 0.1),
-    Sphere(Coords([0.0, -0.2, 0.2]), 0.1),
-    Sphere(Coords([0.0, 0.2, 0.2]), 0.1),
+    Sphere(Coords([0.26, 0.06, 0.02]), 0.055),
+    Sphere(Coords([0.05, -0.30, 0.22]), 0.055),
+    Sphere(Coords([-0.08, 0.28, 0.18]), 0.055),
 ]
 
 robot = Robot(dh_parameters)
+# Гиперпараметры после tune (mean_combined ~0.462 на сетке целей)
 robot.set_inverse(DDPGIK,
                   bounds=angle_limits,
                   obstacles=obstacles,
@@ -50,17 +51,17 @@ robot.set_inverse(DDPGIK,
                   max_steps=150,
                   hidden_dims=[256, 256],
                   actor_lr=1e-4,
-                  critic_lr=1e-3,
+                  critic_lr=5e-4,
                   gamma=0.99,
                   tau=0.005,
                   batch_size=128,
                   buffer_size=200_000,
-                  action_scale=0.05,
-                  noise_sigma=0.2,
+                  action_scale=0.06,
+                  noise_sigma=0.15,
                   noise_theta=0.15,
                   warmup_steps=256,
                   error_weight_mode="exp",
-                  exp_weight_alpha=5.0,
+                  exp_weight_alpha=4.0,
                   max_orientation_weight=0.95,
                   position_tolerance=1e-2,
                   orientation_tolerance=1e-2,
@@ -68,15 +69,19 @@ robot.set_inverse(DDPGIK,
                   image_dir="ddpg_ik_frames",
                   weights_path="checkpoints/ddpg_ik.pt",
                   save_weights_after_run=True,
-                  load_weights_if_exist=True)
+                  load_weights_if_exist=True,
+                  save_training_plot=True,
+                  training_plot_path="ddpg_training_curve.png")
 
 angles, metrics = robot.solve(target)
 robot.visualize(angles, target=target, obstacles=obstacles)
-robot.ik_solver.create_animation("ddpg_ik_solution.gif", frame_interval=300)
+robot.ik_solver.create_animation("ddpg_ik_solution.mp4", frame_interval=300)
 
 print("\nМЕТРИКИ DDPG:")
 print(f"Общее время выполнения: {metrics['total_time']:.4f} секунд")
 print(f"Лучшее значение фитнеса: {metrics['best_fitness']:.6f}")
+print(f"Combined task error (финал): {metrics['combined_task_error']:.6f}")
+print("График обучения: ddpg_training_curve.png")
 print(f"Эпизодов завершено: {metrics['episodes_completed']}")
 print(f"Всего шагов: {metrics['total_steps']}")
 print(f"Целевая позиция: {metrics['target_position']}")

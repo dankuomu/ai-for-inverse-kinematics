@@ -48,9 +48,9 @@ target_rotation = np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]])
 target = Coords(target_position, target_rotation)
 
 obstacles = [
-    Sphere(Coords([0.2, 0.0, 0.0]), 0.1),
-    Sphere(Coords([0.0, -0.2, 0.2]), 0.1),
-    Sphere(Coords([0.0, 0.2, 0.2]), 0.1),
+    Sphere(Coords([0.26, 0.06, 0.02]), 0.055),
+    Sphere(Coords([0.05, -0.30, 0.22]), 0.055),
+    Sphere(Coords([-0.08, 0.28, 0.18]), 0.055),
 ]
 
 robot = Robot(dh_parameters)
@@ -58,7 +58,7 @@ robot.set_inverse(GeneticIK, obstacles=obstacles)
 
 angles, metrics = robot.solve(target)
 robot.visualize(angles, target=target, obstacles=obstacles)
-robot.ik_solver.create_animation("genetic_ik_solution.gif", frame_interval=300)
+robot.ik_solver.create_animation("genetic_ik_solution.mp4", frame_interval=300)
 
 print("МЕТРИКИ ГЕНЕТИЧЕСКОГО АЛГОРИТМА:")
 print(f"Общее время выполнения: {metrics['total_time']:.4f} секунд")
